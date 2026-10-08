@@ -15,7 +15,9 @@ ANTHROPIC_MESSAGES: Final = "anthropic_messages"
 
 DOCUMENTED_RESPONSES_MODELS: Final = frozenset(
     {
+        "grok-4.7",
         "grok-4.6",
+        "gpt-6-luna",
         "gpt-5.6-luna",
         "muse-spark-1.3-contributor",
         "muse-spark-1.2-contributor",
@@ -32,26 +34,31 @@ DOCUMENTED_CHAT_MODELS: Final = frozenset(
         "kimi-k2.7-code",
         "kimi-k2.6",
         "longcat-2.0",
+        "longcat-2.5-preview-free",
         "deepseek-v4.1-flash",
         "deepseek-v4-pro",
         "deepseek-v4-flash",
         "deepseek-v4-flash-vision-exp",
+        "mimo-v2.6-flash",
+        "mimo-v2.6-pro",
         "mimo-v2.5",
         "mimo-v2.5-pro",
         "hy4-preview",
         "hy3",
+        "space-bunny",
     }
 )
 
 DOCUMENTED_MESSAGES_MODELS: Final = frozenset(
     {
+        "claude-haiku-5-5",
         "minimax-m3",
         "minimax-m2.7",
         "minimax-m2.5",
         "qwen3.8-max",
         "qwen3.8-flash",
-        "qwen3.7-max",
         "qwen3.7-plus",
+        "qwen3.7-max",
         "qwen3.6-plus",
     }
 )

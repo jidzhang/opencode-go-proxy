@@ -424,7 +424,7 @@ class TestVersionFlag:
 
         from opencode_go_proxy import __version__
         result = subprocess.run(
-            ["uv", "run", "opencode-go-proxy", "--version"],
+            ["uv", "run", "--frozen", "opencode-go-proxy", "--version"],
             capture_output=True, text=True, check=False, cwd=os.path.dirname(os.path.dirname(__file__)),
         )
         assert result.returncode == 0

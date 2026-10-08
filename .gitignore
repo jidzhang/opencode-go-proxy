@@ -8,3 +8,7 @@ build/
 *.egg-info/
 tmp/
 .scratch/
+# Local secrets: never commit API keys or caller tokens.
+caller-token.txt
+*-token.txt
+*.key
