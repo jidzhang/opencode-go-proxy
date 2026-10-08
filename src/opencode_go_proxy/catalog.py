@@ -273,7 +273,7 @@ def load_known_slugs(catalog_path: str | None = None) -> set[str]:
     if catalog_path is None:
         catalog_path = default_catalog_path()
     try:
-        with open(catalog_path) as f:
+        with open(catalog_path, encoding="utf-8") as f:
             catalog = json.load(f)
         if not isinstance(catalog, dict):
             return set()
@@ -383,7 +383,7 @@ def render_full_catalog(compact: dict) -> dict:
 def load_compact(path: str) -> dict:
     """Load a compact catalog JSON file, raising CatalogDiscoveryError on failure."""
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         raise CatalogDiscoveryError(f"failed to load compact catalog {path}: {exc}") from exc
@@ -395,7 +395,7 @@ def _write_json(path: str, value: dict) -> None:
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".opencode-go-", suffix=".json", dir=directory)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             json.dump(value, f, indent=2)
             f.write("\n")
         os.replace(tmp, path)
@@ -498,7 +498,7 @@ def read_user_models(path: str | None = None) -> list[dict]:
     if path is None:
         path = user_models_path()
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             payload = json.load(f)
         models = payload.get("models")
         if not isinstance(models, list):
@@ -550,7 +550,7 @@ def read_hidden_models(path: str | None = None) -> set[str]:
     if path is None:
         path = model_picker_path()
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             payload = json.load(f)
         hidden = payload.get("hidden")
         if not isinstance(hidden, list):
@@ -652,7 +652,7 @@ def read_announced_at(path: str | None = None) -> dict[str, float] | None:
     if path is None:
         path = announced_models_path()
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             payload = json.load(f)
         models = payload.get("models")
         if not isinstance(models, dict):
@@ -1079,7 +1079,7 @@ def merged_model_slugs() -> list[str]:
     slugs: list[str] = []
     if mtime is not None:
         try:
-            with open(path) as handle:
+            with open(path, encoding="utf-8") as handle:
                 payload = json.load(handle)
         except (OSError, json.JSONDecodeError):
             payload = None

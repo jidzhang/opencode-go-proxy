@@ -71,11 +71,11 @@ def response(value: dict) -> mock.Mock:
     )
 
 
-def test_documented_catalog_has_all_28_models_in_their_official_families() -> None:
-    assert len(DOCUMENTED_GO_MODELS) == 28
-    assert len(DOCUMENTED_RESPONSES_MODELS) == 4
-    assert len(DOCUMENTED_CHAT_MODELS) == 16
-    assert len(DOCUMENTED_MESSAGES_MODELS) == 8
+def test_certified_catalog_has_all_35_models_in_their_families() -> None:
+    assert len(DOCUMENTED_GO_MODELS) == 35
+    assert len(DOCUMENTED_RESPONSES_MODELS) == 6
+    assert len(DOCUMENTED_CHAT_MODELS) == 20
+    assert len(DOCUMENTED_MESSAGES_MODELS) == 9
     assert {go_family_for(model) for model in DOCUMENTED_RESPONSES_MODELS} == {
         OPENAI_RESPONSES
     }
