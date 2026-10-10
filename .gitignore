@@ -12,3 +12,6 @@ tmp/
 caller-token.txt
 *-token.txt
 *.key
+
+# Machine-local tool runtime state.
+.omo/
