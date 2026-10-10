@@ -9,7 +9,12 @@ from unittest import mock
 
 import zstandard
 
-from opencode_go_proxy.app import ProxyConfig, ProxyError, decode_request_body
+from opencode_go_proxy.app import (
+    ProxyConfig,
+    ProxyError,
+    _maybe_dump_request,
+    decode_request_body,
+)
 from opencode_go_proxy.secrets import resolve_api_key
 from opencode_go_proxy.trace import _mask_trace_body
 from opencode_go_proxy.upstream import caption_timeout_sec as _caption_timeout_sec
@@ -341,3 +346,29 @@ class CatalogRefreshTimerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMaybeDumpRequest(unittest.TestCase):
+    def test_no_env_no_file(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "r1.json")
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("OPENCODE_GO_PROXY_DUMP_DIR", None)
+                _maybe_dump_request("/v1/responses", "r1", {"model": "m"})
+            self.assertFalse(os.path.exists(target))
+
+    def test_env_set_writes_envelope(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "dump")
+            payload = {"model": "m", "stream": True, "input": []}
+            with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_DUMP_DIR": dest}):
+                _maybe_dump_request("/v1/responses", "r9", payload)
+            with open(os.path.join(dest, "r9.json"), encoding="utf-8") as handle:
+                record = json.load(handle)
+        self.assertEqual(record["request_id"], "r9")
+        self.assertEqual(record["payload"], payload)
+        self.assertNotIn("authorization", json.dumps(record).lower())

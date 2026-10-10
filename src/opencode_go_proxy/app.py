@@ -149,6 +149,39 @@ def decode_request_body(raw: bytes, content_encoding: str, max_body_bytes: int) 
     raise ProxyError(HTTPStatus.BAD_REQUEST, f"unsupported content-encoding: {content_encoding}")
 
 
+def _maybe_dump_request(path: str, request_id: str, payload: Json) -> None:
+    """Persist the exact client request body when debugging is opted in.
+
+    Debug only, for offline replay (bisecting gateway 400s): explicit opt-in
+    via ``OPENCODE_GO_PROXY_DUMP_DIR``; the body carries no credentials (auth
+    travels in headers and is never dumped). Best-effort: never break a request.
+    """
+    dump_dir = os.environ.get("OPENCODE_GO_PROXY_DUMP_DIR", "").strip()
+    if not dump_dir:
+        return
+    try:
+        os.makedirs(dump_dir, exist_ok=True)
+        with open(
+            os.path.join(dump_dir, f"{request_id}.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump(
+                {
+                    "ts": time.time(),
+                    "request_id": request_id,
+                    "path": path,
+                    "model": payload.get("model"),
+                    "stream": payload.get("stream", False),
+                    "payload": payload,
+                },
+                handle,
+                ensure_ascii=False,
+            )
+    except OSError:
+        pass
+
+
 class ResponsesProxyHandler(BaseHTTPRequestHandler):
     def _guard_request(self) -> None:
         """Enforce the local or explicitly authenticated remote boundary."""
@@ -276,6 +309,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
             check_content_type(self.headers.get("content-type"))
             config = self._config()
             payload = self._read_json(config)
+            _maybe_dump_request(path, request_id, payload)
             model = self._request_model(payload)
             trace(
                 "request.received",
@@ -752,6 +786,16 @@ def main(argv: list[str] | None = None) -> None:
             bind=config.bind,
             message="non-loopback listener protected by a separate caller token",
         )
+    from .upstream_pool import install as _install_upstream_pool
+
+    # Keep-alive upstream connections: one process-wide opener install removes
+    # the per-turn DNS + TCP + TLS handshake tax on every urlopen below
+    # (chat completions, Responses-family relay, zen, captions). Disabled with
+    # OPENCODE_GO_PROXY_POOL=0; never fatal to startup.
+    try:
+        _install_upstream_pool()
+    except Exception as exc:  # noqa: BLE001 - fall back to unpooled stdlib
+        trace("upstream.pool_install_failed", error=str(exc))
     server = ProxyHTTPServer((config.bind, config.port), ResponsesProxyHandler)
     server.config = config  # type: ignore[attr-defined]
     trace(

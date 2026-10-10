@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Added
+
+- Upstream keep-alive connection pool (`src/opencode_go_proxy/upstream_pool.py`,
+  stdlib only): reuses persistent connections across turns instead of paying a
+  fresh TLS handshake per request. Enabled by default; `OPENCODE_GO_PROXY_POOL=0`
+  disables, `OPENCODE_GO_PROXY_POOL_SIZE` / `OPENCODE_GO_PROXY_POOL_IDLE_SEC`
+  tune it. Stale idle connections retry once transparently on a fresh socket.
+- Async buffered stderr tracing: `trace()` now enqueues (never blocks a
+  request; drops are counted as `trace.dropped`) and a single writer thread
+  batches lines. `OPENCODE_GO_PROXY_TRACE=0` disables tracing entirely.
+- Fast path in the Responses SSE relay: text/reasoning deltas without
+  `function_call` + `__` markers skip JSON parsing byte-identically.
+- Drop dangling `function_call` items (a call with no matching output later
+  in `input`, e.g. an abandoned client-side tool call) before forwarding a
+  Responses request: strict gateways reject the whole turn otherwise and the
+  session hard-sticks. Traced as `request.dangling_calls_dropped`;
+  `OPENCODE_GO_PROXY_DROP_DANGLING_CALLS=0` disables.
+- Fix merged `codex_app` tool schemas for the strict chat gateway: snapshots
+  may carry union schemas with no top-level `type` (`automation_update` is a
+  top-level `oneOf`), which rejected every tools-bearing chat-family turn
+  with 400. The normalizer now guarantees top-level `"type": "object"` while
+  preserving sibling keywords (an explicit `"type": null` no longer
+  overwrites the marker); the checked-in snapshot is corrected too.
+- Harden the keep-alive pool against truncated responses: a Content-Length
+  body cut short detaches silently on readline EOF, so `close()` additionally
+  requires a satisfied length before parking the connection.
+- Reasoning-detox retry: when the gateway rejects a turn because cited
+  server-side reasoning has expired (`Referenced reasoning item 'rs_...'
+  was not found or has expired`), retry once with the opaque reasoning blobs
+  stripped (traced as `request.reasoning_detox`). Applies to streaming and
+  non-streaming Responses-family turns; `OPENCODE_GO_PROXY_REASONING_DETOX=0`
+  disables.
+
 ### Security
 
 - Validate the actual client address and require a separate caller token for

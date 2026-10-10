@@ -2,7 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from http import HTTPStatus
+
+_OFF_VALUES = frozenset({"0", "false", "no", "off", ""})
+
+
+def env_flag(name: str, default_on: bool = True) -> bool:
+    """Parse an ``OPENCODE_GO_PROXY_*`` kill-switch env var (default on)."""
+    default = "1" if default_on else "0"
+    return os.environ.get(name, default).strip().lower() not in _OFF_VALUES
 
 
 class ProxyError(Exception):

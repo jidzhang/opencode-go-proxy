@@ -529,6 +529,12 @@ All flags have environment variable defaults:
 | `--timeout-sec` | `OPENCODE_GO_PROXY_TIMEOUT_SEC` | `180` |
 | `--max-body-mb` | `OPENCODE_GO_PROXY_MAX_BODY_MB` | `20` |
 
+Upstream connections are pooled with keep-alive by default (no flag needed).
+`OPENCODE_GO_PROXY_POOL=0` disables pooling, `OPENCODE_GO_PROXY_POOL_SIZE`
+(default `8`) caps idle connections per origin, `OPENCODE_GO_PROXY_POOL_IDLE_SEC`
+(default `60`) expires them. Tracing is async and non-blocking by default;
+`OPENCODE_GO_PROXY_TRACE=0` turns it off.
+
 The proxy accepts both `/responses` and `/v1/responses`.
 
 The upstream base URL resolves in this order: the `--chat-base-url` flag, then `OPENCODE_GO_BASE_URL`, then `OPENCODE_ZEN_BASE_URL`, then the legacy `CHAT_COMPLETIONS_BASE_URL`, then the built-in default.

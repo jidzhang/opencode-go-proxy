@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from typing import Any
 
 from .codex_tools import merge_codex_app_tools
+from .errors import env_flag
 from .routing import normalize_model_slug, route_target
 
 Json = dict[str, Any]
@@ -662,6 +664,123 @@ def restore_namespaced_function_calls(value: Any) -> Any:
         restored["namespace"] = namespace
         restored["name"] = local_name
     return restored
+
+
+def drop_dangling_function_calls(input_value: Any) -> tuple[Any, list[str]]:
+    """Drop ``function_call`` items that have no matching output later on.
+
+    A client that abandons a call (never executes it, never records an
+    output) leaves a dangling call in history, and strict Responses gateways
+    reject the whole turn with ``invalid_request_error`` ("No tool output
+    found for function call ...") on every retry -- the session hard-sticks.
+    A call whose ``call_id`` (or ``id``) appears in no later
+    ``function_call_output`` contributes nothing the model could reference,
+    so removing it is strictly safer than forwarding it. Returns the
+    (possibly unchanged) input and the dropped call ids for tracing.
+    Items without any id are kept: dangling cannot be proven for them.
+    """
+    if not isinstance(input_value, list):
+        return input_value, []
+    output_ids = {
+        item.get("call_id")
+        for item in input_value
+        if isinstance(item, dict)
+        and item.get("type") == "function_call_output"
+        and isinstance(item.get("call_id"), str)
+    }
+    cleaned: list[Any] = []
+    dropped: list[str] = []
+    for item in input_value:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and (isinstance(item.get("call_id"), str) or isinstance(item.get("id"), str))
+            and item.get("call_id") not in output_ids
+            and item.get("id") not in output_ids
+        ):
+            dropped.append(str(item.get("call_id") or item.get("id")))
+            continue
+        cleaned.append(item)
+    if not dropped:
+        return input_value, []
+    return cleaned, dropped
+
+
+_REASONING_EXPIRED_RE = re.compile(r"rs_[A-Za-z0-9:_-]{8,}")
+_REASONING_DETOX_ENV = "OPENCODE_GO_PROXY_REASONING_DETOX"
+
+
+def reasoning_detox_enabled() -> bool:
+    """Whether a reasoning-expiry 400 triggers one detox retry (default on)."""
+    return env_flag(_REASONING_DETOX_ENV, default_on=True)
+
+
+def expired_reasoning_reference(status: Any, body: Any) -> str | None:
+    """Return the offending reasoning id when `body` is the expired-reference 400.
+
+    The gateway keeps server-side reasoning state with a TTL; a turn that
+    resends long-expired ``encrypted_content`` blobs fails with
+    ``Referenced reasoning item 'rs_...' was not found or has expired``.
+    Only that precise shape matches: anything else returns None so unrelated
+    400s are never retried as detox.
+    """
+    try:
+        code = int(status)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if code != 400 or not body:
+        return None
+    text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else body
+    if not isinstance(text, str):
+        return None
+    lowered = text.lower()
+    if "reasoning item" not in lowered or ("expired" not in lowered and "not found" not in lowered):
+        return None
+    match = _REASONING_EXPIRED_RE.search(text)
+    return match.group(0) if match else "unknown"
+
+
+def maybe_detox_payload(payload: Json, status: Any, body: Any) -> tuple[Json, str, int] | None:
+    """Detox decision shared by the stream/non-stream family paths.
+
+    Returns ``(detoxed_payload, ref, dropped)`` when the failure is the
+    expired-reasoning 400 and stripping helps; None otherwise, in which case
+    the caller proceeds with normal error handling.
+    """
+    if not reasoning_detox_enabled():
+        return None
+    ref = expired_reasoning_reference(status, body)
+    if ref is None:
+        return None
+    detoxed, dropped = drop_reasoning_items(payload)
+    if not dropped:
+        return None
+    return detoxed, ref, dropped
+
+
+def drop_reasoning_items(payload: Json) -> tuple[Json, int]:
+    """Return ``(payload, dropped_count)`` without ``type == "reasoning"`` items.
+
+    Encrypted reasoning blobs are opaque continuity hints: dropping them costs
+    the model a rethink, not user-visible history, so a detoxed retry strictly
+    beats a dead turn. Non-list inputs pass through unchanged.
+    """
+    if not isinstance(payload, dict):
+        return payload, 0
+    input_value = payload.get("input")
+    if not isinstance(input_value, list):
+        return payload, 0
+    kept = [
+        item
+        for item in input_value
+        if not (isinstance(item, dict) and item.get("type") == "reasoning")
+    ]
+    dropped = len(input_value) - len(kept)
+    if not dropped:
+        return payload, 0
+    cleaned = dict(payload)
+    cleaned["input"] = kept
+    return cleaned, dropped
 
 
 def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
