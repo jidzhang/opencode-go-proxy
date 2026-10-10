@@ -55,6 +55,9 @@ from .protocol import (
     responses_input_to_chat_messages,
     responses_payload_to_chat_payload,
     responses_tools_to_chat_tools,
+    drop_dangling_function_calls,
+    env_flag,
+    maybe_detox_payload,
     responses_tools_to_function_tools,
     restore_namespaced_function_calls,
 )
@@ -1691,6 +1694,14 @@ def _restore_responses_sse_line(line: bytes) -> bytes:
     prefix = b"data:"
     if not line.startswith(prefix):
         return line
+    # Fast path: namespace restore only touches ``function_call`` items whose
+    # flat name carries "__". Pure text / reasoning deltas -- the hot 99% of a
+    # stream -- contain neither marker and skip JSON parsing entirely. A line
+    # that merely mentions both words (e.g. code text) still falls through to
+    # the exact legacy path below, so this only ever saves work, never changes
+    # output.
+    if b"function_call" not in line or b"__" not in line:
+        return line
     raw = line[len(prefix):].strip()
     if not raw or raw == b"[DONE]":
         return line
@@ -1722,10 +1733,22 @@ def handle_family_responses_request(
     """Serve a Responses request through one certified upstream family."""
     started = time.time()
 
+    if env_flag("OPENCODE_GO_PROXY_DROP_DANGLING_CALLS", default_on=True):
+        cleaned, dropped_ids = drop_dangling_function_calls(payload.get("input"))
+        if dropped_ids:
+            payload = dict(payload)
+            payload["input"] = cleaned
+            trace(
+                "request.dangling_calls_dropped",
+                request_id=request_id,
+                provider=provider,
+                model=model,
+                dropped=dropped_ids,
+            )
+
     if payload.get("stream") is not True:
-        _send_json(
-            handler,
-            call_family_responses(
+        try:
+            result = call_family_responses(
                 payload,
                 config,
                 request_id,
@@ -1739,8 +1762,42 @@ def handle_family_responses_request(
                 function_tools_only=function_tools_only,
                 restore_namespaces=restore_namespaces,
                 caption_images=caption_images,
-            ),
-        )
+            )
+        except ProxyError as exc:
+            status = exc.upstream_status if exc.upstream_status is not None else int(exc.status)
+            decision = maybe_detox_payload(payload, status, exc.body)
+            if decision is None:
+                raise
+            detoxed, ref, dropped = decision
+            # The turn's history cites server-side reasoning that has since
+            # expired; retry once without the opaque blobs (each attempt is
+            # metered inside call_family_responses). A second failure
+            # propagates as-is: it reflects the detoxed state.
+            trace(
+                "request.reasoning_detox",
+                request_id=request_id,
+                provider=provider,
+                model=model,
+                dropped=dropped,
+                ref=ref,
+                stream=False,
+            )
+            result = call_family_responses(
+                detoxed,
+                config,
+                request_id,
+                model=model,
+                bare_id=bare_id,
+                family=family,
+                api_key=api_key,
+                base_url=base_url,
+                provider=provider,
+                extra_headers=extra_headers,
+                function_tools_only=function_tools_only,
+                restore_namespaces=restore_namespaces,
+                caption_images=caption_images,
+            )
+        _send_json(handler, result)
         return
 
     url, body, headers = _build_family_request(
@@ -1760,34 +1817,76 @@ def handle_family_responses_request(
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
     trace(f"{provider}.start", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True)
-    try:
-        response, retries = _open_upstream_stream(req, config, request_id, default_max_retries())
-    except _ConnectFailed as fail:
-        retries = fail.attempts
-        exc = fail.exc
-        if isinstance(exc, urllib.error.HTTPError):
-            _relay_upstream_error(handler, exc.code, fail.body, exc.headers)
+    pending_retries = 0
+    detoxes = 1
+    while True:
+        try:
+            response, retries = _open_upstream_stream(req, config, request_id, default_max_retries())
+            retries += pending_retries
+            break
+        except _ConnectFailed as fail:
+            exc = fail.exc
+            if detoxes and isinstance(exc, urllib.error.HTTPError):
+                decision = maybe_detox_payload(payload, exc.code, fail.body)
+                if decision is not None:
+                    detoxed, ref, dropped = decision
+                    # Same expired-reference 400 as the non-stream path: one
+                    # retry without the opaque blobs, then fall through to the
+                    # normal error handling below on any second failure.
+                    detoxes = 0
+                    pending_retries += fail.attempts or 0
+                    trace(
+                        "request.reasoning_detox",
+                        request_id=request_id,
+                        provider=provider,
+                        model=model,
+                        dropped=dropped,
+                        ref=ref,
+                        stream=True,
+                    )
+                    payload = detoxed
+                    url, body, headers = _build_family_request(
+                        payload,
+                        family,
+                        bare_id,
+                        api_key,
+                        stream=True,
+                        session_model=model,
+                        base_url=base_url,
+                        extra_headers=extra_headers,
+                        function_tools_only=function_tools_only,
+                        caption_images=caption_images,
+                        config=config,
+                        request_id=request_id,
+                    )
+                    raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
+                    req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
+                    trace(f"{provider}.start", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True, detox_retry=True)
+                    continue
+            retries = (fail.attempts or 0) + pending_retries
+            if isinstance(exc, urllib.error.HTTPError):
+                _relay_upstream_error(handler, exc.code, fail.body, exc.headers)
+                _meter_provider(
+                    model, started, exc.code, provider=provider, retries=retries or None
+                )
+                return
             _meter_provider(
-                model, started, exc.code, provider=provider, retries=retries or None
+                model, started,
+                int(HTTPStatus.GATEWAY_TIMEOUT if isinstance(exc, TimeoutError) else HTTPStatus.BAD_GATEWAY),
+                provider=provider,
+                retries=retries or None,
             )
-            return
-        _meter_provider(
-            model, started,
-            int(HTTPStatus.GATEWAY_TIMEOUT if isinstance(exc, TimeoutError) else HTTPStatus.BAD_GATEWAY),
-            provider=provider,
-            retries=retries or None,
-        )
-        if isinstance(exc, TimeoutError):
+            if isinstance(exc, TimeoutError):
+                raise ProxyError(
+                    HTTPStatus.GATEWAY_TIMEOUT,
+                    f"{provider} upstream timeout",
+                    retries=retries,
+                ) from exc
             raise ProxyError(
-                HTTPStatus.GATEWAY_TIMEOUT,
-                f"{provider} upstream timeout",
+                HTTPStatus.BAD_GATEWAY,
+                f"{provider} upstream network error: {getattr(exc, 'reason', exc)}",
                 retries=retries,
             ) from exc
-        raise ProxyError(
-            HTTPStatus.BAD_GATEWAY,
-            f"{provider} upstream network error: {getattr(exc, 'reason', exc)}",
-            retries=retries,
-        ) from exc
 
     handler.send_response(HTTPStatus.OK)
     handler.send_header("content-type", "text/event-stream")

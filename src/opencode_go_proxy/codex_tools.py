@@ -55,9 +55,28 @@ def state_tools_path() -> str:
 
 
 def _normalize_tool(flat_name: str, description: Any, parameters: Any) -> Json:
-    """One codex_app function entry -> the chat function shape the proxy emits."""
+    """One codex_app function entry -> the chat function shape the proxy emits.
+
+    The chat-completions gateway strictly requires every function schema to
+    carry a top-level ``"type": "object"`` (it rejects the whole turn
+    otherwise). Snapshots may carry union schemas (e.g. ``automation_update``
+    is a top-level ``oneOf`` with no ``type``); those keep every sibling
+    keyword (``oneOf``/``$defs``/...) and only gain the top-level object
+    marker, which preserves semantics because every branch already constrains
+    objects. An explicit non-object ``type`` is left untouched: rewriting it
+    would corrupt the shape, and the gateway names the function when it
+    rejects, so such a case surfaces loudly instead of silently changing.
+    """
     desc = description if isinstance(description, str) else ""
-    params = parameters if isinstance(parameters, dict) else {"type": "object", "properties": {}}
+    if isinstance(parameters, dict):
+        params = parameters
+        if params.get("type", None) is None:
+            # Drop a missing/None marker instead of spreading it: {"type":
+            # "object", **params} would let an explicit "type": None
+            # overwrite the marker and the gateway would reject the turn.
+            params = {"type": "object", **{k: v for k, v in params.items() if k != "type"}}
+    else:
+        params = {"type": "object", "properties": {}}
     return {"type": "function", "function": {"name": flat_name, "description": desc, "parameters": params}}
 
 
