@@ -28,9 +28,17 @@ def make_config(port: int) -> ProxyConfig:
     )
 
 
-def http_error(code: int, body: bytes = b'{"error":{"message":"upstream down"}}') -> urllib.error.HTTPError:
+def http_error(
+    code: int,
+    body: bytes = b'{"error":{"message":"upstream down"}}',
+    headers: dict[str, str] | None = None,
+) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        "https://mock-upstream.test/v1/chat/completions", code, "err", {}, io.BytesIO(body)
+        "https://mock-upstream.test/v1/chat/completions",
+        code,
+        "err",
+        headers or {},
+        io.BytesIO(body),
     )
 
 
@@ -82,6 +90,21 @@ def chat_body(stream: bool = False) -> bytes:
         "messages": [{"role": "user", "content": "hi"}],
         "stream": stream,
     }).encode("utf-8")
+
+
+GO_QUOTA_BODY = json.dumps({
+    "type": "error",
+    "error": {"type": "GoUsageLimitError", "message": "Go usage limit exceeded"},
+    "metadata": {"workspace": "org-test", "limitName": "weekly"},
+}).encode("utf-8")
+
+
+def go_quota_error() -> urllib.error.HTTPError:
+    return http_error(
+        429,
+        GO_QUOTA_BODY,
+        {"content-type": "application/json", "retry-after": "35038"},
+    )
 
 
 def post(port: int, path: str, body: bytes) -> tuple:
@@ -153,6 +176,20 @@ class TestChatCompletionsPassthrough:
         assert resp.status == 429
         assert raw == err_body
         assert b"proxy_error" not in raw
+
+    def test_go_usage_limit_is_relayed_as_terminal_quota_error(self, server):
+        port, _ = server
+
+        with mock.patch.dict(os.environ, {
+            "OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_MAX_RETRIES": "2",
+        }), mock.patch("urllib.request.urlopen", side_effect=go_quota_error()) as urlopen:
+            resp, raw = post(port, "/v1/chat/completions", chat_body())
+
+        assert resp.status == 429
+        assert urlopen.call_count == 1
+        assert json.loads(raw)["error"]["type"] == "insufficient_quota"
+        assert json.loads(raw)["error"]["message"] == "Go usage limit exceeded (weekly)"
+        assert resp.getheader("retry-after") == "35038"
 
     def test_upstream_500_maps_to_502_and_keeps_body(self, server):
         port, _ = server
@@ -271,6 +308,47 @@ class TestChatCompletionsPassthrough:
 
         assert resp.status == 413
         assert b"cap" in raw
+
+
+class TestResponsesGoUsageLimit:
+    def responses_body(self, stream: bool) -> bytes:
+        return json.dumps({
+            "model": "muse-spark-1.3-contributor",
+            "input": "Say something.",
+            "stream": stream,
+        }).encode("utf-8")
+
+    def test_stream_rejects_before_sse_and_does_not_retry(self, server):
+        port, _ = server
+
+        with mock.patch.dict(os.environ, {
+            "OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_MAX_RETRIES": "2",
+        }), mock.patch("urllib.request.urlopen", side_effect=go_quota_error()) as urlopen:
+            resp, raw = post(port, "/v1/responses", self.responses_body(stream=True))
+
+        assert resp.status == 429
+        assert "text/event-stream" not in resp.getheader("content-type", "")
+        assert urlopen.call_count == 1
+        error = json.loads(raw)["error"]
+        assert error["type"] == "insufficient_quota"
+        assert error["code"] == "insufficient_quota"
+        assert error["message"] == "Go usage limit exceeded (weekly)"
+        assert resp.getheader("retry-after") == "35038"
+
+    def test_nonstream_surfaces_terminal_quota_error_envelope(self, server):
+        port, _ = server
+
+        with mock.patch.dict(os.environ, {
+            "OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_MAX_RETRIES": "2",
+        }), mock.patch("urllib.request.urlopen", side_effect=go_quota_error()) as urlopen:
+            resp, raw = post(port, "/v1/responses", self.responses_body(stream=False))
+
+        assert resp.status == 429
+        assert urlopen.call_count == 1
+        error = json.loads(raw)["error"]
+        assert error["type"] == "insufficient_quota"
+        assert error["message"] == "Go usage limit exceeded (weekly)"
+        assert resp.getheader("retry-after") == "35038"
 
 
 class TestMessagesEndpoint:

@@ -18,6 +18,8 @@ from opencode_go_proxy.upstream import (
     call_upstream_chat,
     call_upstream_chat_verbatim,
     caption_timeout_sec,
+    normalize_usage_limit_error,
+    retriable_http_failure,
 )
 
 
@@ -37,6 +39,13 @@ def http_error(code: int, retry_after: str | None = None) -> urllib.error.HTTPEr
     return urllib.error.HTTPError(
         "https://up.test/v1/chat/completions", code, "err", hdrs, io.BytesIO(b'{"error":"down"}')
     )
+
+
+GO_QUOTA_BODY = json.dumps({
+    "type": "error",
+    "error": {"type": "GoUsageLimitError", "message": "Go usage limit exceeded"},
+    "metadata": {"workspace": "org-test", "limitName": "weekly"},
+}).encode("utf-8")
 
 
 def ok_response() -> mock.Mock:
@@ -67,6 +76,35 @@ class TestRetryPolicy:
             _value, retries = call_upstream_chat(chat_payload(), make_config(), "req")
         assert retries == 1
         assert len(calls) == 2
+
+    def test_go_usage_limit_is_terminal_and_normalized(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://up.test/v1/chat/completions",
+            429,
+            "Too Many Requests",
+            {"retry-after": "35038"},
+            io.BytesIO(GO_QUOTA_BODY),
+        )
+
+        assert not retriable_http_failure(429, GO_QUOTA_BODY)
+        assert retriable_http_failure(429, b'{"error":{"type":"rate_limit_error"}}')
+
+        normalized = normalize_usage_limit_error(GO_QUOTA_BODY)
+        assert isinstance(normalized, bytes)
+        value = json.loads(normalized)
+        assert value["error"]["type"] == "insufficient_quota"
+        assert value["error"]["code"] == "insufficient_quota"
+        assert value["error"]["message"] == "Go usage limit exceeded (weekly)"
+        assert b"org-test" not in normalized
+
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
+             mock.patch("urllib.request.urlopen", side_effect=error) as urlopen, \
+             pytest.raises(ProxyError) as ctx:
+            call_upstream_chat(chat_payload(), make_config(), "req")
+
+        assert urlopen.call_count == 1
+        assert ctx.value.error_type == "insufficient_quota"
+        assert ctx.value.headers == {"retry-after": "35038"}
 
     def test_no_retry_on_permanent_error(self) -> None:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \

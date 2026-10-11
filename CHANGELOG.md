@@ -48,6 +48,13 @@
 - Avoid reverse-DNS lookup delays while starting the local listener.
 - Clarify the project's independent, single-user credential and policy boundary.
 
+### Fixed
+
+- Normalize OpenCode Go's terminal `GoUsageLimitError` 429 into the OpenAI
+  `insufficient_quota` error shape and stop retrying it locally. Codex treats
+  the native envelope as generic pacing and can otherwise wait for the weekly
+  quota's multi-hour `Retry-After` interval.
+
 ## [0.4.10] - 2026-08-14
 
 ## [0.4.8] - 2026-08-14

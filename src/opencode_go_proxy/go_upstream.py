@@ -19,7 +19,12 @@ from .protocol import DEFAULT_MODEL
 from .secrets import resolve_api_key
 from .streaming import _ConnectFailed, _open_upstream_stream
 from .trace import trace
-from .upstream import default_max_retries, retriable_http_status, retry_sleep
+from .upstream import (
+    default_max_retries,
+    normalize_usage_limit_error,
+    retriable_http_failure,
+    retry_sleep,
+)
 from .upstream_headers import upstream_user_agent
 from .zen_upstream import (
     ANTHROPIC_VERSION,
@@ -213,7 +218,7 @@ def _handle_go_verbatim_request(
             retry_after = (
                 exc.headers.get("retry-after") if exc.headers else None
             )
-            if retriable_http_status(status) and retries < max_retries:
+            if retriable_http_failure(status, response_body) and retries < max_retries:
                 retries += 1
                 retry_sleep(retries)
                 continue
@@ -235,6 +240,9 @@ def _handle_go_verbatim_request(
     handler.send_header("content-type", content_type)
     if retry_after:
         handler.send_header("retry-after", retry_after)
+    normalized_body = normalize_usage_limit_error(response_body)
+    if normalized_body is not None:
+        response_body = normalized_body
     handler.send_header("content-length", str(len(response_body)))
     handler.end_headers()
     handler.wfile.write(response_body)

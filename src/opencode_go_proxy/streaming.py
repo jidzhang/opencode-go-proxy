@@ -45,7 +45,7 @@ from .trace import _mask_trace_body, trace
 from .upstream import (
     default_max_retries,
     record_cache,
-    retriable_http_status,
+    retriable_http_failure,
     retry_sleep,
     usage_tokens,
 )
@@ -140,7 +140,7 @@ def _open_upstream_stream(
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             trace("upstream.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body))
-            if retriable_http_status(exc.code) and attempts < max_retries:
+            if retriable_http_failure(exc.code, body) and attempts < max_retries:
                 attempts += 1
                 trace("upstream.retry", request_id=request_id, attempt=attempts, status=exc.code)
                 retry_sleep(attempts)
