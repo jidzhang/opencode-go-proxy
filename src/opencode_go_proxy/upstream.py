@@ -2,7 +2,8 @@
 
 Every non-streaming upstream call goes through :func:`call_upstream_chat`:
 JSON request, bounded retries on transient failures (429 / 5xx / network /
-timeout), and a consistent mapping of upstream failures to :class:`ProxyError`.
+timeout, excluding terminal account quota failures), and a consistent mapping
+of upstream failures to :class:`ProxyError`.
 """
 
 from __future__ import annotations
@@ -54,6 +55,61 @@ def default_max_retries() -> int:
 
 def retriable_http_status(code: int) -> bool:
     return code in (429, 500, 502, 503, 504)
+
+
+def _usage_limit_details(body: bytes | str) -> tuple[str, str] | None:
+    """Return (message, limit_name) for OpenCode Go's terminal quota envelope."""
+    try:
+        if isinstance(body, bytes):
+            body = body.decode("utf-8")
+        value = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    error = value.get("error")
+    if not isinstance(error, dict) or error.get("type") != "GoUsageLimitError":
+        return None
+    message = error.get("message")
+    metadata = value.get("metadata")
+    limit_name = metadata.get("limitName") if isinstance(metadata, dict) else None
+    if not isinstance(message, str) or not message:
+        message = "Go usage limit exceeded"
+    if not isinstance(limit_name, str) or not limit_name:
+        limit_name = "usage"
+    return message, limit_name
+
+
+def retriable_http_failure(status: int, body: bytes | str) -> bool:
+    """Whether an HTTP failure is transient, accounting for terminal quotas."""
+    if not retriable_http_status(status):
+        return False
+    return status != 429 or _usage_limit_details(body) is None
+
+
+def normalize_usage_limit_error(body: bytes | str) -> bytes | str | None:
+    """Render Go's quota envelope as Codex's terminal OpenAI error shape.
+
+    OpenCode returns ``GoUsageLimitError`` as an Anthropic-style top-level
+    ``type``. Codex treats an unrecognized 429 as capacity pacing and waits for
+    ``Retry-After``; ``insufficient_quota`` is explicitly terminal. Preserve the
+    input type (bytes or text) for verbatim relay paths.
+    """
+    details = _usage_limit_details(body)
+    if details is None:
+        return None
+    message, limit_name = details
+    rendered = json.dumps(
+        {
+            "error": {
+                "type": "insufficient_quota",
+                "code": "insufficient_quota",
+                "message": f"{message} ({limit_name})",
+            }
+        },
+        separators=(",", ":"),
+    )
+    return rendered.encode("utf-8") if isinstance(body, bytes) else rendered
 
 
 def retry_sleep(attempt: int) -> None:
@@ -124,7 +180,7 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             trace("upstream.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body))
-            if retriable_http_status(exc.code) and retries < max_retries:
+            if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
                 trace("upstream.retry", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
@@ -132,6 +188,15 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
             if exc.code == 429:
                 upstream_retry_after = (exc.headers or {}).get("retry-after")
                 retry_after = upstream_retry_after or "5"
+                normalized = normalize_usage_limit_error(body)
+                if normalized is not None:
+                    raise ProxyError(
+                        HTTPStatus.TOO_MANY_REQUESTS,
+                        json.loads(normalized)["error"]["message"],
+                        retries=retries,
+                        error_type="insufficient_quota",
+                        headers={"retry-after": upstream_retry_after} if upstream_retry_after else None,
+                    ) from exc
                 raise ProxyError(
                     HTTPStatus.TOO_MANY_REQUESTS,
                     f"rate limited (retry after {retry_after}s)",
@@ -202,11 +267,14 @@ def call_upstream_chat_verbatim(
         except urllib.error.HTTPError as exc:
             body = exc.read()
             trace("upstream.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
-            if retriable_http_status(exc.code) and retries < max_retries:
+            if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
                 trace("upstream.retry", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
                 continue
+            normalized = normalize_usage_limit_error(body)
+            if normalized is not None:
+                body = normalized
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), (exc.headers or {}).get("retry-after")
         except urllib.error.URLError as exc:
             trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))

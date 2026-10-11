@@ -66,8 +66,9 @@ from .streaming import _ConnectFailed, _open_upstream_stream, keepalive_sec
 from .trace import _mask_trace_body, trace
 from .upstream import (
     default_max_retries,
+    normalize_usage_limit_error,
     record_cache,
-    retriable_http_status,
+    retriable_http_failure,
     retry_sleep,
     usage_tokens,
 )
@@ -366,17 +367,26 @@ def _zen_post(
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             trace(f"{provider}.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body))
-            if retriable_http_status(exc.code) and retries < max_retries:
+            if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
                 trace(f"{provider}.retry", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
                 continue
             error_type, message = parse_zen_error(body)
+            normalized = normalize_usage_limit_error(body)
+            if normalized is not None:
+                body = normalized
+                error_type, message = parse_zen_error(body)
             if exc.code == 429:
                 retry_after = (exc.headers.get("retry-after", "5") if exc.headers else "5")
+                quota_message = (
+                    message
+                    if error_type == "insufficient_quota"
+                    else f"rate limited (retry after {retry_after}s)"
+                )
                 raise ProxyError(
                     HTTPStatus.TOO_MANY_REQUESTS,
-                    f"rate limited (retry after {retry_after}s)",
+                    quota_message,
                     retries=retries,
                     upstream_status=exc.code,
                     error_type=error_type,
@@ -449,11 +459,14 @@ def _zen_post_verbatim(
         except urllib.error.HTTPError as exc:
             body = exc.read()
             trace("zen.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
-            if retriable_http_status(exc.code) and retries < max_retries:
+            if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
                 trace("zen.retry", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
                 continue
+            normalized = normalize_usage_limit_error(body)
+            if normalized is not None:
+                body = normalized
             retry_after = exc.headers.get("retry-after") if exc.headers else None
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), retry_after
         except urllib.error.URLError as exc:
@@ -1008,7 +1021,13 @@ def _relay_upstream_error(
     """Relay an upstream error status and body before any SSE is committed.
 
     ``retry-after`` is forwarded when the upstream sent one (429 pacing).
+    OpenCode Go's terminal usage-limit envelope is normalized to the OpenAI
+    ``insufficient_quota`` shape so clients do not mistake a weekly quota reset
+    for short-lived request pacing.
     """
+    normalized = normalize_usage_limit_error(body)
+    if normalized is not None:
+        body = normalized
     content_type = (headers.get("content-type") if headers else None) or "application/json"
     handler.send_response(status)
     if headers:

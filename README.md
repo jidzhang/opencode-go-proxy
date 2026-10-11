@@ -278,6 +278,9 @@ See the [lazycodex docs](https://github.com/code-yeongyu/oh-my-openagent) for se
 - Prefix caching: byte-stable request prefixes plus `include_usage`, with per-model hit ratio on `/cache`
 - Honest usage meter: append-only `usage-events.jsonl` in the state dir (truncated or empty responses never count as success)
 - Upstream retry with bounded exponential backoff on transient failures (429/5xx/network/timeout)
+- Terminal OpenCode Go usage-limit failures are normalized to OpenAI
+  `insufficient_quota` and are not retried, so Codex stops instead of waiting
+  for a multi-hour weekly-quota reset
 - Ops CLI: `doctor` (reference-style checks with `--fix` for safe repairs), `smoke-test` (marker prompt through the local proxy), `support-bundle` (JSON schema v1, mode 0600), `install` (points at the macOS menu bar app; no launchd agent), `install-skills`, `refresh-runtime`, and `status`
 - Spawned threads inherit the parent session's model (`create_thread`; `chatgptWorkCloud` targets are skipped)
 - Correctness contract: empty upstream completions are retried once (a second empty stream answers an `empty_completion` error), zero-input-token reports are estimated for compaction (`OPENCODE_GO_PROXY_ESTIMATE_ZERO_INPUT=0` disables), and keepalive comments run until the stream truly ends without interleaving into data frames
