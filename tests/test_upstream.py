@@ -1,5 +1,6 @@
 """Unit tests for the shared upstream client (upstream.py)."""
 
+import http.client
 import io
 import json
 import os
@@ -127,6 +128,28 @@ class TestRetryPolicy:
             call_upstream_chat(chat_payload(), make_config(), "req", max_retries=0)
         assert urlopen.call_count == 1
         assert ctx.value.status == HTTPStatus.BAD_GATEWAY
+
+    def test_remote_disconnected_retries_then_surfaces_502(self) -> None:
+        # RemoteDisconnected (upstream closed before response headers) is not a
+        # URLError; it must land in the transient-retry bucket, not crash.
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
+             mock.patch(
+                 "urllib.request.urlopen",
+                 side_effect=http.client.RemoteDisconnected("no response"),
+             ) as urlopen, \
+             pytest.raises(ProxyError) as ctx:
+            call_upstream_chat(chat_payload(), make_config(), "req", max_retries=0)
+        assert urlopen.call_count == 1
+        assert ctx.value.status == HTTPStatus.BAD_GATEWAY
+
+    def test_remote_disconnected_is_retried(self) -> None:
+        responses = [http.client.RemoteDisconnected("no response"), ok_response()]
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
+             mock.patch("urllib.request.urlopen", side_effect=responses) as urlopen:
+            value, retries = call_upstream_chat(chat_payload(), make_config(), "req")
+        assert urlopen.call_count == 2
+        assert retries == 1
+        assert value["choices"][0]["message"]["content"] == "hi"
 
     def test_timeout_propagates_to_urlopen(self) -> None:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
