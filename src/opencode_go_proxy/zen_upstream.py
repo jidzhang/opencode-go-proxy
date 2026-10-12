@@ -410,7 +410,9 @@ def _zen_post(
                 },
                 body=body,
             ) from exc
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+            # Transient connect-phase failures, incl. RemoteDisconnected (a
+            # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace(f"{provider}.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1
@@ -469,7 +471,9 @@ def _zen_post_verbatim(
                 body = normalized
             retry_after = exc.headers.get("retry-after") if exc.headers else None
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), retry_after
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+            # Transient connect-phase failures, incl. RemoteDisconnected (a
+            # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("zen.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1

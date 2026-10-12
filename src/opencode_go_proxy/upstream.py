@@ -8,6 +8,7 @@ of upstream failures to :class:`ProxyError`.
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
@@ -214,7 +215,9 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
                 upstream_status=exc.code,
                 body=body,
             ) from exc
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+            # Transient connect-phase failures, incl. RemoteDisconnected (a
+            # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1
@@ -276,7 +279,9 @@ def call_upstream_chat_verbatim(
             if normalized is not None:
                 body = normalized
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), (exc.headers or {}).get("retry-after")
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+            # Transient connect-phase failures, incl. RemoteDisconnected (a
+            # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1
