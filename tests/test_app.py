@@ -2,6 +2,7 @@ import gzip
 import io
 import json
 import os
+import socket
 import subprocess
 import unittest
 from http import HTTPStatus
@@ -12,6 +13,7 @@ import zstandard
 from opencode_go_proxy.app import (
     ProxyConfig,
     ProxyError,
+    _listener_already_active,
     _maybe_dump_request,
     decode_request_body,
 )
@@ -372,3 +374,27 @@ class TestMaybeDumpRequest(unittest.TestCase):
         self.assertEqual(record["request_id"], "r9")
         self.assertEqual(record["payload"], payload)
         self.assertNotIn("authorization", json.dumps(record).lower())
+
+
+class DoubleStartGuardTests(unittest.TestCase):
+    """_listener_already_active must see a live listener and stay quiet otherwise."""
+
+    def test_detects_live_listener(self) -> None:
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(8)
+        port = server.getsockname()[1]
+        try:
+            self.assertTrue(_listener_already_active("0.0.0.0", port))
+            self.assertTrue(_listener_already_active("127.0.0.1", port))
+        finally:
+            server.close()
+
+    def test_free_port_reports_false(self) -> None:
+        # Grab then release an ephemeral port: the kernel may hand it back out,
+        # but a bind+close race is unlikely to matter for a one-shot probe test.
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        self.assertFalse(_listener_already_active("127.0.0.1", port))

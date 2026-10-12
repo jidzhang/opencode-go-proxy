@@ -12,6 +12,7 @@ import io
 import json
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -83,6 +84,21 @@ class ProxyHTTPServer(ThreadingHTTPServer):
         TCPServer.server_bind(self)
         self.server_name = str(self.server_address[0])
         self.server_port = int(self.server_address[1])
+
+
+def _listener_already_active(bind: str, port: int) -> bool:
+    """True when another socket already accepts connections on this port.
+
+    TCP connect probe (no proxies, short timeout): SO_REUSEADDR on Windows
+    lets a second bind silently succeed alongside a live listener, so the
+    only reliable double-start signal is somebody actually answering.
+    """
+    probe_host = "127.0.0.1" if bind in {"0.0.0.0", ""} else bind
+    try:
+        with socket.create_connection((probe_host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False
 
 
 def _decompress_bounded(reader: Any, cap: int) -> bytes:
@@ -796,6 +812,15 @@ def main(argv: list[str] | None = None) -> None:
         _install_upstream_pool()
     except Exception as exc:  # noqa: BLE001 - fall back to unpooled stdlib
         trace("upstream.pool_install_failed", error=str(exc))
+    if _listener_already_active(config.bind, config.port):
+        # Refuse to become a second listener (see helper docstring).
+        trace(
+            "server.start_refused",
+            bind=config.bind,
+            port=config.port,
+            reason="another instance is already listening on this port",
+        )
+        return 1
     server = ProxyHTTPServer((config.bind, config.port), ResponsesProxyHandler)
     server.config = config  # type: ignore[attr-defined]
     trace(
