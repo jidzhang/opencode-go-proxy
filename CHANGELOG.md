@@ -55,6 +55,16 @@
   the native envelope as generic pacing and can otherwise wait for the weekly
   quota's multi-hour `Retry-After` interval.
 
+- Retry transient `RemoteDisconnected` upstream failures (the gateway closed
+  the connection before response headers) inside the bounded retry bucket
+  instead of crashing the request: `streaming.py`, both `upstream.py` chat
+  callers, both `zen_upstream.py` zen POST helpers, and the native
+  passthrough relay.
+- Refuse to start a second listener when the port already serves one
+  (`server.start_refused`, exit 1): on Windows `SO_REUSEADDR` lets two
+  processes silently share one port, so double-clicking the start script
+  used to split traffic across two instances.
+
 ## [0.4.10] - 2026-08-14
 
 ## [0.4.8] - 2026-08-14

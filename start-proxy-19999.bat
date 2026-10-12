@@ -19,6 +19,10 @@ set no_proxy=%NO_PROXY%
 set OPENCODE_GO_PROXY_ALLOW_REMOTE=1
 set OPENCODE_GO_PROXY_BIND=0.0.0.0
 set OPENCODE_GO_PROXY_PORT=%PROXY_PORT%
+REM Request-body dump is OFF by default (each body is ~1MB; a day fills GBs).
+REM To bisect a gateway 400 offline, uncomment the next line (no credentials in
+REM dump - auth travels in headers). Remember to delete logs\request-dump after.
+REM set OPENCODE_GO_PROXY_DUMP_DIR=%~dp0logs\request-dump
 
 if not defined OPENCODE_GO_API_KEY (
   echo [input] OPENCODE_GO_API_KEY is not set.
@@ -38,8 +42,10 @@ echo [proxy] laptops must set same CALLER_TOKEN as env OPENCODE_GO_PROXY_CALLER_
 echo.
 
 cd /d "%~dp0"
+if not exist "%~dp0logs" mkdir "%~dp0logs" 2>nul
 REM --frozen keeps uv from rewriting uv.lock on every start.
-uv run --frozen opencode-go-proxy --bind 0.0.0.0 --port %PROXY_PORT%
+REM stderr trace stream appends to logs\proxy-19999.log (machine-local, gitignored).
+uv run --frozen opencode-go-proxy --bind 0.0.0.0 --port %PROXY_PORT% >> "%~dp0logs\proxy-19999.log" 2>&1
 set EXITCODE=%ERRORLEVEL%
 echo.
 echo [proxy] exited with code %EXITCODE%

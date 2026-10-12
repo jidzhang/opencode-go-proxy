@@ -15,3 +15,6 @@ caller-token.txt
 
 # Machine-local tool runtime state.
 .omo/
+
+# Local runtime logs and request dumps (machine-local).
+logs/
