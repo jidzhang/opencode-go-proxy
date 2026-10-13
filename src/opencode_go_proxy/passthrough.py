@@ -11,7 +11,6 @@ from __future__ import annotations
 import http.client
 import json
 import os
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -22,8 +21,9 @@ from typing import Any
 
 from .config import ProxyConfig
 from .errors import ProxyError
+from .guards import caller_bearer_matches
 from .meter import record_usage_event
-from .streaming import keepalive_sec
+from .streaming import KeepaliveWriter
 from .trace import trace
 
 Json = dict[str, Any]
@@ -63,12 +63,29 @@ def resolve_native_base_url(explicit: str | None = None) -> str:
     return NATIVE_BASE_URL_DEFAULT
 
 
+def is_stream_terminal(line: bytes) -> bool:
+    """True when an SSE line ends the stream: [DONE] or response.completed.
+
+    The completed match is on the quoted event value, so both compact JSON
+    (``{"type":"response.completed",...}``) and spaced serialization
+    (``{"type": "response.completed",...}``) count as terminal.
+    """
+    return b"[DONE]" in line or b'"response.completed"' in line
+
+
 def _forwarded_headers(handler: Any) -> dict[str, str]:
     headers: dict[str, str] = {}
     for name in FORWARD_HEADERS:
         value = handler.headers.get(name)
         if value:
             headers[name] = value
+    # Never forward a caller-token Bearer to the native backend: generic
+    # clients (zcode) authenticate remote proxy access via Authorization
+    # because they cannot send the custom X-OpenCode-Go-Proxy-Token header.
+    # That value is a proxy capability, not a provider credential, so a
+    # native-model request carrying it must fail closed, not leak it.
+    if caller_bearer_matches(handler.headers):
+        headers.pop("authorization", None)
     for name, value in handler.headers.items():
         lowered = name.lower()
         if lowered.startswith("x-") and not lowered.startswith("x-opencode-go-"):
@@ -112,6 +129,8 @@ def _relay_stream(
     handler: Any,
     request_id: str,
     transform_line: Callable[[bytes], bytes] | None = None,
+    *,
+    keepalive: KeepaliveWriter | None = None,
 ) -> str:
     """Relay upstream SSE lines with a keepalive comment thread.
 
@@ -119,43 +138,23 @@ def _relay_stream(
     marker ([DONE] or response.completed), "aborted" when it ended without
     one (upstream error or truncation), "gone" when the client disconnected.
     The 200 head is already committed by the caller in every case, so the
-    meter must record the outcome rather than a naive 200.
+    meter must record the outcome rather than a naive 200. Pass ``keepalive``
+    to share one writer across relay attempts; otherwise a private one is
+    created and stopped here.
     """
-    keepalive_stop = threading.Event()
-    write_lock = threading.Lock()
-    interval = keepalive_sec()
-    client_alive = True
-
-    def keepalive() -> None:
-        nonlocal client_alive
-        while not keepalive_stop.wait(interval):
-            if not client_alive:
-                return
-            try:
-                with write_lock:
-                    handler.wfile.write(b": keepalive\n\n")
-                    handler.wfile.flush()
-            except (BrokenPipeError, OSError):
-                client_alive = False
-                return
-
-    ka_thread = threading.Thread(target=keepalive, daemon=True)
-    ka_thread.start()
+    ka = keepalive if keepalive is not None else KeepaliveWriter(handler)
+    if keepalive is None:
+        ka.start()
     outcome = "aborted"
     try:
         with response as resp:
             for line in resp:
-                if not client_alive:
+                if not ka.alive:
                     outcome = "gone"
                     break
                 if transform_line is not None:
                     line = transform_line(line)
-                try:
-                    with write_lock:
-                        handler.wfile.write(line)
-                        handler.wfile.flush()
-                except (BrokenPipeError, OSError):
-                    client_alive = False
+                if not ka.write(line):
                     outcome = "gone"
                     trace(
                         "client.disconnected",
@@ -163,7 +162,7 @@ def _relay_stream(
                         message="client closed connection during stream",
                     )
                     break
-                if b"[DONE]" in line or b'"type":"response.completed"' in line:
+                if is_stream_terminal(line):
                     outcome = "done"
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
         outcome = "aborted"
@@ -173,7 +172,8 @@ def _relay_stream(
             status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
         )
     finally:
-        keepalive_stop.set()
+        if keepalive is None:
+            ka.stop()
     return outcome
 
 

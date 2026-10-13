@@ -16,6 +16,7 @@ from opencode_go_proxy.guards import (
     CALLER_TOKEN_ENV,
     CALLER_TOKEN_HEADER,
     REMOTE_ENV,
+    _bearer_token,
     check_client,
     validate_bind_security,
 )
@@ -360,6 +361,43 @@ class TestRemoteClientBoundary:
             clear=True,
         ):
             check_client("192.0.2.10", {CALLER_TOKEN_HEADER: self.TOKEN})
+
+    def test_remote_client_accepts_bearer_caller_token(self):
+        # zcode custom providers only expose apiKey (sent as Bearer) and
+        # cannot send the custom caller-token header.
+        with mock.patch.dict(
+            os.environ,
+            {REMOTE_ENV: "1", CALLER_TOKEN_ENV: self.TOKEN},
+            clear=True,
+        ):
+            check_client("192.0.2.10", {"authorization": f"Bearer {self.TOKEN}"})
+
+    def test_remote_client_rejects_bare_token_without_scheme(self):
+        with mock.patch.dict(
+            os.environ,
+            {REMOTE_ENV: "1", CALLER_TOKEN_ENV: self.TOKEN},
+            clear=True,
+        ), pytest.raises(ProxyError) as raised:
+            check_client("192.0.2.10", {"authorization": self.TOKEN})
+        assert raised.value.status == 401
+        assert raised.value.error_type == "invalid_caller_token"
+
+    def test_remote_client_rejects_wrong_bearer(self):
+        with mock.patch.dict(
+            os.environ,
+            {REMOTE_ENV: "1", CALLER_TOKEN_ENV: self.TOKEN},
+            clear=True,
+        ), pytest.raises(ProxyError) as raised:
+            check_client("192.0.2.10", {"authorization": "Bearer wrong-value"})
+        assert raised.value.status == 401
+        assert raised.value.error_type == "invalid_caller_token"
+
+    def test_bearer_token_parsing(self):
+        assert _bearer_token({"authorization": f"Bearer {self.TOKEN}"}) == self.TOKEN
+        assert _bearer_token({"authorization": f"bearer {self.TOKEN} "}) == self.TOKEN
+        assert _bearer_token({}) == ""
+        assert _bearer_token({"authorization": self.TOKEN}) == ""
+        assert _bearer_token({"authorization": "Basic abc"}) == ""
 
     def test_ipv4_mapped_loopback_stays_local(self):
         with mock.patch.dict(os.environ, {}, clear=True):

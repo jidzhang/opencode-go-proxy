@@ -247,7 +247,7 @@ class TestChatFamily:
 
         handler = _FakeHandler()
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
-             mock.patch("opencode_go_proxy.zen_upstream.keepalive_sec", return_value=60.0):
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_responses_request(handler, zen_payload(), make_config(), "req")
 
         sent = _request_body(captured[0])
@@ -271,7 +271,7 @@ class TestChatFamily:
         ]
         handler = _FakeHandler()
         with mock.patch("urllib.request.urlopen", return_value=_UpstreamStream(lines)), \
-             mock.patch("opencode_go_proxy.zen_upstream.keepalive_sec", return_value=60.0):
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_responses_request(handler, zen_payload(), make_config(), "req")
 
         completed = next(e for e in handler.events() if e["type"] == "response.completed")
@@ -319,7 +319,7 @@ class TestResponsesFamily:
         ]
         handler = _FakeHandler()
         with mock.patch("urllib.request.urlopen", return_value=_UpstreamStream(lines)), \
-             mock.patch("opencode_go_proxy.zen_upstream.keepalive_sec", return_value=60.0):
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
 
         assert handler.status == 200
@@ -347,6 +347,200 @@ class TestResponsesFamily:
         assert _request_body(captured[0])["model"] == "gpt-5.6"
         records = _meter_records()
         assert records and records[0]["provider"] == "zen"
+
+    def test_verbatim_empty_terminal_retries_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_key(monkeypatch)
+        empty = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+            b'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs1"}}\n',
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}\n',
+            b'data: [DONE]\n',
+        ]
+        full = [
+            b'data: {"type":"response.created","response":{"id":"r2","status":"in_progress"}}\n',
+            b'data: {"type":"response.output_text.delta","delta":"hi"}\n',
+            b'data: {"type":"response.completed","response":{"id":"r2","status":"completed"}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            return _UpstreamStream(empty if len(calls) == 1 else full)
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 2
+        # The discarded empty attempt never reaches the client.
+        assert handler.body() == b"".join(full)
+        records = _meter_records()
+        assert records and records[0]["provider"] == "zen"
+        assert records[0]["status"] == 200
+
+    def test_verbatim_reasoning_only_terminal_retries_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Reasoning deltas are dropped by downstream SDKs, so a completed
+        # reasoning-only stream is still an empty turn and gets the retry.
+        _fake_key(monkeypatch)
+        reasoning_only = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+            b'data: {"type":"response.reasoning_text.delta","delta":"thinking"}\n',
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed"}}\n',
+            b'data: [DONE]\n',
+        ]
+        full = [
+            b'data: {"type":"response.created","response":{"id":"r2","status":"in_progress"}}\n',
+            b'data: {"type":"response.output_text.delta","delta":"hi"}\n',
+            b'data: {"type":"response.completed","response":{"id":"r2","status":"completed"}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            return _UpstreamStream(reasoning_only if len(calls) == 1 else full)
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 2
+        assert handler.body() == b"".join(full)
+
+    def test_verbatim_cut_without_terminal_retries_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_key(monkeypatch)
+        cut = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+        ]
+        full = [
+            b'data: {"type":"response.created","response":{"id":"r2","status":"in_progress"}}\n',
+            b'data: {"type":"response.output_text.delta","delta":"hi"}\n',
+            b'data: {"type":"response.completed","response":{"id":"r2","status":"completed"}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            return _UpstreamStream(cut if len(calls) == 1 else full)
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 2
+        assert handler.body() == b"".join(full)
+        records = _meter_records()
+        assert records and records[0]["provider"] == "zen"
+        assert records[0]["status"] == 200
+
+    def test_verbatim_exception_cut_retries_without_duplication(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A mid-stream upstream EXCEPTION during buffering must discard the
+        # partial attempt, not flush it before the retry: the client must see
+        # exactly one stream, not partial-attempt-1 + full-attempt-2.
+        _fake_key(monkeypatch)
+        full = [
+            b'data: {"type":"response.created","response":{"id":"r2","status":"in_progress"}}\n',
+            b'data: {"type":"response.output_text.delta","delta":"hi"}\n',
+            b'data: {"type":"response.completed","response":{"id":"r2","status":"completed"}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        class _CutStream:
+            def __init__(self, lines: list[bytes]) -> None:
+                self._lines = list(lines)
+
+            def __iter__(self):
+                yield from self._lines
+                raise http.client.IncompleteRead(b"upstream cut mid-stream")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            if len(calls) == 1:
+                return _CutStream([
+                    b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+                    b'data: {"type":"response.output_text.delta","delta":"partial"}\n',
+                ])
+            return _UpstreamStream(full)
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 2
+        # Exactly the second attempt: no duplicated r1 events, no stray delta.
+        assert handler.body() == b"".join(full)
+        records = _meter_records()
+        assert records and records[0]["provider"] == "zen"
+        assert records[0]["status"] == 200
+
+    def test_verbatim_retry_connect_failure_relays_first_attempt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # When the retry cannot connect, the client still gets the buffered
+        # first attempt (well-formed empty turn) instead of a bare 200 SSE.
+        _fake_key(monkeypatch)
+        empty = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            if len(calls) == 1:
+                return _UpstreamStream(empty)
+            # A 400 is non-retriable, so the retry fails immediately.
+            raise urllib.error.HTTPError(
+                "https://x/zen/v1/responses", 400, "Bad Request",
+                {"content-type": "application/json"},
+                io.BytesIO(b'{"error":{"message":"bad request"}}'),
+            )
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 2
+        assert handler.body() == b"".join(empty)
+        records = _meter_records()
+        assert records and records[0]["provider"] == "zen"
+        assert records[0]["status"] == 502
+
+    def test_verbatim_double_empty_relays_second(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_key(monkeypatch)
+        empty = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            return _UpstreamStream(empty)
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        # Only one transparent retry: the client still sees the second empty
+        # exactly as before, and its own retry policy still applies.
+        assert len(calls) == 2
+        assert handler.body() == b"".join(empty)
 
 
 class TestAnthropicFamily:
@@ -443,7 +637,7 @@ class TestAnthropicFamily:
             return _UpstreamStream(lines)
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
-             mock.patch("opencode_go_proxy.zen_upstream.keepalive_sec", return_value=60.0):
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/claude-sonnet-4"), make_config(), "req")
 
         assert handler.status == 200
@@ -539,7 +733,7 @@ class TestGeminiFamily:
             return _UpstreamStream(lines)
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
-             mock.patch("opencode_go_proxy.zen_upstream.keepalive_sec", return_value=60.0):
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gemini-3-pro"), make_config(), "req")
 
         assert handler.status == 200
@@ -667,7 +861,7 @@ class TestZenChatSurface:
             return _UpstreamStream(lines)
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
-             mock.patch("opencode_go_proxy.zen_upstream.keepalive_sec", return_value=60.0):
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_chat_request(
                 handler,
                 {"model": "zen/deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}], "stream": True},
@@ -765,7 +959,7 @@ class TestAppDispatch:
             }
             with mock.patch.dict(os.environ, env), \
                  mock.patch("opencode_go_proxy.zen_upstream.resolve_api_key", return_value="test-key-zen"), \
-                 mock.patch("opencode_go_proxy.zen_upstream.keepalive_sec", return_value=60.0):
+                 mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
                 import http.client
 
                 conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)

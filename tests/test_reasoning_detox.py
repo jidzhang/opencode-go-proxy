@@ -206,19 +206,19 @@ class TestStreamDetox:
                 raise _ConnectFailed(self._http_error(
                     json.dumps({"error": {"message": EXPIRED}}).encode()), 0,
                     json.dumps({"error": {"message": EXPIRED}}).encode())
-            return mock.sentinel.response, 0
+            return mock.MagicMock(), 0
 
         relayed = {}
 
-        def fake_relay(response, handler, request_id, transform=None):
-            relayed["transform"] = transform
-            return "done"
+        def fake_relay(handler, config, request_id, **kwargs):
+            relayed["response"] = kwargs.get("response")
+            return None
 
         handler = FakeHandler()
         payload = _payload()
         payload["stream"] = True
         with mock.patch.object(zu, "_open_upstream_stream", side_effect=fake_open), \
-             mock.patch.object(zu, "_relay_stream", side_effect=fake_relay), \
+             mock.patch.object(zu, "_relay_responses_verbatim", side_effect=fake_relay), \
              mock.patch.object(zu, "_meter_provider"), \
              mock.patch.object(zu, "record_quota_from_headers", create=True):
             zu.handle_family_responses_request(

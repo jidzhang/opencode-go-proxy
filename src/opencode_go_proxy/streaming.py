@@ -106,6 +106,65 @@ def _client_gone(wfile: Any) -> bool:
         return False
 
 
+class KeepaliveWriter:
+    """Keepalive comment thread plus the single write lock for one SSE client.
+
+    Owns the stop event, the write lock, and the liveness flag that relay
+    loops share with the keepalive thread, so ``write``/``writelines`` are
+    the only paths that touch ``handler.wfile`` and keepalive comments
+    interleave safely with stream lines. Both return False once the client
+    connection has failed, which also stops further keepalive writes. One
+    instance per client stream: hand it to passthrough._relay_stream to keep
+    a single thread and lock across a multi-attempt relay instead of one
+    hand-rolled copy per relay site.
+    """
+
+    def __init__(self, handler: Any) -> None:
+        self._handler = handler
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._interval = keepalive_sec()
+        self._alive = True
+
+    @property
+    def alive(self) -> bool:
+        return self._alive
+
+    def start(self) -> None:
+        threading.Thread(target=self._keepalive, daemon=True).start()
+
+    def _keepalive(self) -> None:
+        while not self._stop.wait(self._interval):
+            if not self._alive:
+                return
+            if not self._write_all([b": keepalive\n\n"]):
+                return
+
+    def _write_all(self, chunks: list[bytes]) -> bool:
+        try:
+            with self._lock:
+                wfile = self._handler.wfile
+                for chunk in chunks:
+                    wfile.write(chunk)
+                wfile.flush()
+            return True
+        except (BrokenPipeError, OSError):
+            self._alive = False
+            return False
+
+    def write(self, data: bytes) -> bool:
+        """Write one line and flush; False when the client is gone."""
+        return self._write_all([data])
+
+    def writelines(self, lines: list[bytes]) -> bool:
+        """Write buffered lines under one lock with a single flush; False when gone."""
+        return self._write_all(lines)
+
+    def stop(self) -> None:
+        """Signal the keepalive thread to exit; it is a daemon, so no join."""
+        self._stop.set()
+
+
 class _ConnectFailed(Exception):
     """Upstream connect failed after bounded transient retries.
 
