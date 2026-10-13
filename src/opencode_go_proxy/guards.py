@@ -6,6 +6,7 @@ import hmac
 import ipaddress
 import os
 from http import HTTPStatus
+from typing import Any
 
 from .errors import ProxyError
 
@@ -54,8 +55,57 @@ def check_host(host: str | None) -> None:
         raise ProxyError(HTTPStatus.FORBIDDEN, "request host is not allowed", error_type="invalid_host")
 
 
+def caller_token_matches(supplied: str, expected: str) -> bool:
+    """Timing-safe caller-token equality, safe for non-ASCII values.
+
+    ``hmac.compare_digest`` rejects non-ASCII str (TypeError), which would
+    turn a valid non-ASCII token into a 500 in :func:`check_client` and --
+    worse -- into a silently skipped caller-token strip (fail-open leak
+    upstream) in the native relay. Comparing UTF-8 bytes avoids both.
+    """
+    if not supplied or not expected:
+        return False
+    return hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+
+
+def _bearer_token(headers: Any) -> str:
+    """Extract a Bearer token from Authorization, else empty string.
+
+    Generic OpenAI-compatible clients (e.g. zcode, whose custom-provider
+    JSON only exposes an apiKey field and cannot send custom headers)
+    carry credentials only as Authorization Bearer. Accepting the caller
+    token there as a fallback lets those clients authenticate remote
+    access without a custom header slot. Lookup uses the lowercase key,
+    matching FORWARD_HEADERS convention; HTTPMessage .get is
+    case-insensitive, and plain-dict test doubles use lowercase too.
+    """
+    auth = (headers.get("authorization") or "").strip()
+    if auth[:7].lower() != "bearer ":
+        return ""
+    return auth[7:].strip()
+
+
+def caller_bearer_matches(headers: Any) -> bool:
+    """True when the Authorization Bearer equals the configured caller token.
+
+    Single source of the "is this Bearer the caller capability?" decision:
+    :func:`check_client` accepts it and the native relay strips it before
+    forwarding, and both must agree on what counts as the caller token or
+    the capability leaks upstream.
+    """
+    expected = os.environ.get(CALLER_TOKEN_ENV, "")
+    if len(expected) < MIN_CALLER_TOKEN_LENGTH:
+        return False
+    return caller_token_matches(_bearer_token(headers), expected)
+
+
 def check_client(client_host: str, headers) -> None:
-    """Require a separate caller capability for non-loopback clients."""
+    """Require a separate caller capability for non-loopback clients.
+
+    Primary credential is X-OpenCode-Go-Proxy-Token. As a fallback for
+    clients that cannot send custom headers, Authorization Bearer with the
+    caller token is accepted too. Upstream auth never reuses this value.
+    """
     if _is_loopback(client_host):
         return
     if os.environ.get(REMOTE_ENV) != "1":
@@ -72,12 +122,13 @@ def check_client(client_host: str, headers) -> None:
             "remote access is not securely configured",
             error_type="remote_auth_not_configured",
         )
-    if not hmac.compare_digest(supplied, expected):
-        raise ProxyError(
-            HTTPStatus.UNAUTHORIZED,
-            "valid remote caller token required",
-            error_type="invalid_caller_token",
-        )
+    if caller_token_matches(supplied, expected) or caller_bearer_matches(headers):
+        return
+    raise ProxyError(
+        HTTPStatus.UNAUTHORIZED,
+        "valid remote caller token required",
+        error_type="invalid_caller_token",
+    )
 
 
 def validate_bind_security(bind: str) -> None:

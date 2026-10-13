@@ -565,6 +565,8 @@ wire_api = "responses"
 env_http_headers = { "X-OpenCode-Go-Proxy-Token" = "OPENCODE_GO_PROXY_CALLER_TOKEN" }
 ```
 
+Clients that cannot send custom headers (e.g. zcode, whose custom-provider JSON only exposes an apiKey field sent as Authorization Bearer) may send the caller token as Authorization Bearer instead. For a zcode custom provider, set its apiKey to the caller-token value and point baseUrl at the proxy. The proxy never forwards this value upstream: Go/Zen requests rebuild their own credentials from the server-side key, and the native relay strips a caller-token Bearer before forwarding.
+
 Use TLS and network-level access controls for any remote deployment. The caller
 token is only a proxy access capability; it is never used as or forwarded as a
 provider credential. Browser-originated requests remain blocked in remote mode.

@@ -40,7 +40,7 @@ from .meter import (
     note_real_input_tokens,
     record_usage_event,
 )
-from .passthrough import _relay_stream
+from .passthrough import _relay_stream, is_stream_terminal
 from .protocol import (
     DEFAULT_MODEL,
     _normalize_image_url,
@@ -62,7 +62,13 @@ from .protocol import (
     restore_namespaced_function_calls,
 )
 from .secrets import resolve_api_key
-from .streaming import _ConnectFailed, _open_upstream_stream, keepalive_sec
+from .streaming import (
+    KeepaliveWriter,
+    _ConnectFailed,
+    _client_gone,
+    _open_upstream_stream,
+    keepalive_sec,
+)
 from .trace import _mask_trace_body, trace
 from .upstream import (
     default_max_retries,
@@ -1736,6 +1742,163 @@ def _restore_responses_sse_line(line: bytes) -> bytes:
     return b"data: " + json.dumps(restored, separators=(",", ":")).encode() + b"\n"
 
 
+
+_RESPONSES_EMPTY_RETRY_CAP = 8 * 1024 * 1024
+
+_RESPONSES_CONTENT_MARKERS = (
+    b"response.output_text.delta",
+    b"function_call",  # subsumes response.function_call_arguments.delta
+    b"tool_call",
+)
+# Deliberately NOT content markers: reasoning-only streams (however many
+# reasoning deltas they carried) count as empty, because downstream SDKs drop
+# signature-bearing reasoning parts and the turn still fails as
+# ``empty_model_response`` on the client -- exactly the retry this exists for.
+
+
+def _responses_buffer_has_content(lines: list[bytes]) -> bool:
+    """True when buffered Responses SSE carries client-visible output.
+
+    Reasoning-only streams count as empty: downstream SDKs drop
+    signature-bearing reasoning parts, so such a turn still fails as
+    ``empty_model_response`` on the client and deserves the retry.
+    """
+    for line in lines:
+        for marker in _RESPONSES_CONTENT_MARKERS:
+            if marker in line:
+                return True
+    return False
+
+
+def _relay_responses_verbatim(
+    handler: Any,
+    config: ProxyConfig,
+    request_id: str,
+    *,
+    model: str,
+    provider: str,
+    family: str,
+    req: urllib.request.Request,
+    response: Any,
+    retries: int,
+    started: float,
+    restore_namespaces: bool,
+) -> None:
+    """Relay a Responses-family SSE stream with one transparent empty retry.
+
+    The first upstream attempt is buffered while keepalive comments keep the
+    client from idling: when it ends without client-visible output -- either
+    an empty terminal or a mid-stream cut with no terminal marker (the
+    silent-reasoning disconnect) -- it is discarded and an identical second
+    attempt is relayed live. A non-empty first attempt flushes byte-identical,
+    so healthy streams are untouched; a buffer overflow also degrades to a
+    plain live relay. One keepalive writer spans both attempts, so no second
+    thread or write lock ever touches the client socket.
+    """
+    transform = _restore_responses_sse_line if restore_namespaces else None
+
+    def _meter(outcome: str, extra_retries: int) -> None:
+        total = retries + extra_retries
+        if outcome == "done":
+            _meter_provider(model, started, 200, provider=provider, retries=total or None)
+        elif outcome == "gone":
+            _meter_provider(model, started, 0, provider=provider, stream_aborted=True, retries=total or None)
+        else:
+            _meter_provider(model, started, 502, provider=provider, stream_aborted=True, retries=total or None)
+
+    def _done(outcome: str, **extra: Any) -> None:
+        trace(f"{provider}.done", request_id=request_id, family=family, stream=True, outcome=outcome, **extra)
+
+    ka = KeepaliveWriter(handler)
+    ka.start()
+    try:
+        buffered: list[bytes] = []
+        buffered_bytes = 0
+        live = False
+        outcome = "aborted"
+        try:
+            with response as resp:
+                for raw in resp:
+                    if not ka.alive or _client_gone(handler.wfile):
+                        outcome = "gone"
+                        ka.stop()
+                        break
+                    line = transform(raw) if transform is not None else raw
+                    # Terminal check runs for EVERY line, including the one
+                    # that triggers the buffer-overflow flush below: the
+                    # overflow branch must not swallow a [DONE] sitting on
+                    # that line, or a fully relayed stream meters as aborted.
+                    if is_stream_terminal(line):
+                        outcome = "done"
+                    if not live:
+                        buffered.append(line)
+                        buffered_bytes += len(line)
+                        if buffered_bytes > _RESPONSES_EMPTY_RETRY_CAP:
+                            live = True
+                            if not ka.writelines(buffered):
+                                outcome = "gone"
+                                break
+                            buffered = []  # released; live mode never appends again
+                    elif not ka.write(line):
+                        outcome = "gone"
+                        break
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+            trace(
+                f"{provider}.stream_aborted",
+                request_id=request_id,
+                status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
+            )
+            # This attempt is discarded and retried below, so the buffered
+            # prefix must NOT be flushed here: a partial flush followed by the
+            # full second attempt would duplicate events on the client. Only
+            # check whether the client is still around, for metering.
+            if _client_gone(handler.wfile):
+                outcome = "gone"
+        if outcome == "gone" or live:
+            _meter(outcome, 0)
+            _done(outcome)
+            return
+        if outcome == "done" and _responses_buffer_has_content(buffered):
+            # A dead client must not meter as a 200: the flush is the last
+            # write of a healthy stream, so honor its result.
+            if not ka.writelines(buffered):
+                outcome = "gone"
+            _meter(outcome, 0)
+            _done(outcome)
+            return
+        trace(
+            f"{provider}.empty_retry",
+            request_id=request_id,
+            family=family,
+            stream=True,
+            outcome=outcome,
+            lines=len(buffered),
+        )
+        try:
+            response2, retries2 = _open_upstream_stream(req, config, request_id, default_max_retries())
+        except _ConnectFailed as fail:
+            exc = fail.exc
+            trace(
+                f"{provider}.empty_retry_failed",
+                request_id=request_id,
+                status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
+            )
+            # The retry never produced a stream, so hand the client the
+            # buffered first attempt: it is well-formed (terminal included
+            # when outcome is done) and beats a bare empty 200 SSE body. The
+            # aborted retry still meters as an aborted stream.
+            if buffered:
+                ka.writelines(buffered)
+            _meter("aborted", fail.attempts or 0)
+            _done("aborted")
+            return
+        outcome2 = _relay_stream(response2, handler, request_id, transform, keepalive=ka)
+        _meter(outcome2, 1 + retries2)
+        _done(outcome2, empty_retried=True)
+    finally:
+        ka.stop()
+
+
 def handle_family_responses_request(
     handler: Any,
     payload: Json,
@@ -1917,35 +2080,19 @@ def handle_family_responses_request(
     handler.end_headers()
 
     if family == "openai_responses":
-        outcome = _relay_stream(
-            response,
+        _relay_responses_verbatim(
             handler,
+            config,
             request_id,
-            _restore_responses_sse_line if restore_namespaces else None,
+            model=model,
+            provider=provider,
+            family=family,
+            req=req,
+            response=response,
+            retries=retries,
+            started=started,
+            restore_namespaces=restore_namespaces,
         )
-        if outcome == "done":
-            _meter_provider(
-                model, started, 200, provider=provider, retries=retries or None
-            )
-        elif outcome == "gone":
-            _meter_provider(
-                model,
-                started,
-                0,
-                provider=provider,
-                stream_aborted=True,
-                retries=retries or None,
-            )
-        else:
-            _meter_provider(
-                model,
-                started,
-                502,
-                provider=provider,
-                stream_aborted=True,
-                retries=retries or None,
-            )
-        trace(f"{provider}.done", request_id=request_id, family=family, stream=True, outcome=outcome)
         return
 
     engine = _ZenStreamEngine(
