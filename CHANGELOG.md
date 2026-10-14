@@ -56,6 +56,10 @@
 
 ### Changed
 
+- Responses-family empty-stream retry now tries up to three times with
+  backoff (`OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS`, default `1000,2000`):
+  attempts 1-2 stay buffered and are discarded when empty, attempt 3 relays
+  live so the client always sees a terminal outcome.
 - Reject unknown or malformed model IDs before routing instead of silently
   substituting `deepseek-v4-flash`.
 - Avoid reverse-DNS lookup delays while starting the local listener.

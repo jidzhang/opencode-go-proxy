@@ -519,8 +519,12 @@ class TestResponsesFamily:
         assert records and records[0]["provider"] == "zen"
         assert records[0]["status"] == 502
 
-    def test_verbatim_double_empty_relays_second(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_verbatim_double_empty_relays_third(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Two consecutive empty attempts earn a third and final attempt, which
+        # relays live: the client still sees an empty turn, and its own retry
+        # policy still applies on top.
         _fake_key(monkeypatch)
+        monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "0,0")
         empty = [
             b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
             b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}\n',
@@ -537,10 +541,117 @@ class TestResponsesFamily:
              mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
 
-        # Only one transparent retry: the client still sees the second empty
-        # exactly as before, and its own retry policy still applies.
-        assert len(calls) == 2
+        assert len(calls) == 3
         assert handler.body() == b"".join(empty)
+
+    def test_verbatim_empty_empty_then_full_relays_third(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Empty, empty, then content: the third attempt carries the turn.
+        _fake_key(monkeypatch)
+        monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "0,0")
+        empty = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}\n',
+            b'data: [DONE]\n',
+        ]
+        full = [
+            b'data: {"type":"response.created","response":{"id":"r3","status":"in_progress"}}\n',
+            b'data: {"type":"response.output_text.delta","delta":"hi"}\n',
+            b'data: {"type":"response.completed","response":{"id":"r3","status":"completed"}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            return _UpstreamStream(full if len(calls) == 3 else empty)
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 3
+        assert handler.body() == b"".join(full)
+        records = _meter_records()
+        assert records and records[0]["provider"] == "zen"
+        assert records[0]["status"] == 200
+
+    def test_verbatim_third_connect_failure_relays_last_buffered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Attempts 1 and 2 are empty, attempt 3 never connects: the client
+        # still gets the last buffered empty turn instead of a bare 200 SSE.
+        _fake_key(monkeypatch)
+        monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "0,0")
+        empty = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            if len(calls) == 3:
+                # A 400 is non-retriable, so the third open fails immediately.
+                raise urllib.error.HTTPError(
+                    "https://x/zen/v1/responses", 400, "Bad Request",
+                    {"content-type": "application/json"},
+                    io.BytesIO(b'{"error":{"message":"bad request"}}'),
+                )
+            return _UpstreamStream(empty)
+
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 3
+        assert handler.body() == b"".join(empty)
+        records = _meter_records()
+        assert records and records[0]["provider"] == "zen"
+        assert records[0]["status"] == 502
+
+    def test_verbatim_empty_retry_backoff_sleeps(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The two waits come from the env (100,200) and run before opens 2/3.
+        _fake_key(monkeypatch)
+        monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "100,200")
+        empty = [
+            b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
+            b'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[]}}\n',
+            b'data: [DONE]\n',
+        ]
+        calls: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            calls.append(req)
+            return _UpstreamStream(empty)
+
+        sleeps: list[float] = []
+        handler = _FakeHandler()
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0), \
+             mock.patch("opencode_go_proxy.zen_upstream.time.sleep", side_effect=lambda s: sleeps.append(s)):
+            zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
+
+        assert len(calls) == 3
+        assert sleeps == [0.1, 0.2]
+
+
+class TestEmptyRetryWaits:
+    def test_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", raising=False)
+        assert zen_upstream._empty_retry_waits() == [1000, 2000]
+
+    def test_single_value_reused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "0")
+        assert zen_upstream._empty_retry_waits() == [0]
+
+    def test_garbage_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "soon,later")
+        assert zen_upstream._empty_retry_waits() == [1000, 2000]
+
+    def test_negative_clamped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "-5,200")
+        assert zen_upstream._empty_retry_waits() == [0, 200]
 
 
 class TestAnthropicFamily:

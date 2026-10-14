@@ -1748,6 +1748,8 @@ def _restore_responses_sse_line(line: bytes) -> bytes:
 
 _RESPONSES_EMPTY_RETRY_CAP = 8 * 1024 * 1024
 
+_EMPTY_RETRY_WAIT_DEFAULT_MS = (1000, 2000)
+
 _RESPONSES_CONTENT_MARKERS = (
     b"response.output_text.delta",
     b"function_call",  # subsumes response.function_call_arguments.delta
@@ -1773,6 +1775,27 @@ def _responses_buffer_has_content(lines: list[bytes]) -> bool:
     return False
 
 
+def _empty_retry_waits() -> list[int]:
+    """Backoff waits (ms) before empty-retry attempts 2 and 3.
+
+    Overridable via ``OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS="1000,2000"``.
+    Garbage falls back to the default; a single value is reused for both
+    waits so ``"0"`` disables sleeping entirely (handy for tests).
+    """
+    raw = os.getenv(
+        "OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS",
+        ",".join(str(v) for v in _EMPTY_RETRY_WAIT_DEFAULT_MS),
+    )
+    try:
+        waits = [int(part.strip()) for part in raw.split(",") if part.strip() != ""]
+    except ValueError:
+        return list(_EMPTY_RETRY_WAIT_DEFAULT_MS)
+    waits = [w if w >= 0 else 0 for w in waits]
+    if not waits:
+        return list(_EMPTY_RETRY_WAIT_DEFAULT_MS)
+    return waits
+
+
 def _relay_responses_verbatim(
     handler: Any,
     config: ProxyConfig,
@@ -1787,16 +1810,17 @@ def _relay_responses_verbatim(
     started: float,
     restore_namespaces: bool,
 ) -> None:
-    """Relay a Responses-family SSE stream with one transparent empty retry.
+    """Relay a Responses-family SSE stream with transparent empty retries.
 
-    The first upstream attempt is buffered while keepalive comments keep the
-    client from idling: when it ends without client-visible output -- either
-    an empty terminal or a mid-stream cut with no terminal marker (the
-    silent-reasoning disconnect) -- it is discarded and an identical second
-    attempt is relayed live. A non-empty first attempt flushes byte-identical,
-    so healthy streams are untouched; a buffer overflow also degrades to a
-    plain live relay. One keepalive writer spans both attempts, so no second
-    thread or write lock ever touches the client socket.
+    Up to three consecutive attempts: attempts 1 and 2 run buffered while
+    keepalive comments keep the client from idling, and are discarded when
+    they end without client-visible output -- either an empty terminal or a
+    mid-stream cut with no terminal marker (the silent-reasoning
+    disconnect). Attempt 3 relays live so the client always sees a terminal
+    outcome. A non-empty buffered attempt flushes byte-identical, so healthy
+    streams are untouched; a buffer overflow also degrades to a plain live
+    relay. One keepalive writer spans all attempts, so no second thread or
+    write lock ever touches the client socket.
     """
     transform = _restore_responses_sse_line if restore_namespaces else None
 
@@ -1815,89 +1839,135 @@ def _relay_responses_verbatim(
     ka = KeepaliveWriter(handler)
     ka.start()
     try:
-        buffered: list[bytes] = []
-        buffered_bytes = 0
-        live = False
-        outcome = "aborted"
-        try:
-            with response as resp:
-                for raw in resp:
-                    if not ka.alive or _client_gone(handler.wfile):
-                        outcome = "gone"
-                        ka.stop()
-                        break
-                    line = transform(raw) if transform is not None else raw
-                    # Terminal check runs for EVERY line, including the one
-                    # that triggers the buffer-overflow flush below: the
-                    # overflow branch must not swallow a [DONE] sitting on
-                    # that line, or a fully relayed stream meters as aborted.
-                    if is_stream_terminal(line):
-                        outcome = "done"
-                    if not live:
-                        buffered.append(line)
-                        buffered_bytes += len(line)
-                        if buffered_bytes > _RESPONSES_EMPTY_RETRY_CAP:
-                            live = True
-                            if not ka.writelines(buffered):
-                                outcome = "gone"
-                                break
-                            buffered = []  # released; live mode never appends again
-                    elif not ka.write(line):
-                        outcome = "gone"
-                        break
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
-            trace(
-                f"{provider}.stream_aborted",
-                request_id=request_id,
-                status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
-            )
-            # This attempt is discarded and retried below, so the buffered
-            # prefix must NOT be flushed here: a partial flush followed by the
-            # full second attempt would duplicate events on the client. Only
-            # check whether the client is still around, for metering.
-            if _client_gone(handler.wfile):
-                outcome = "gone"
-        if outcome == "gone" or live:
-            _meter(outcome, 0)
+        def _run_buffered(resp: Any) -> tuple[str, list[bytes] | None]:
+            """Relay one attempt buffered; return (outcome, lines or None).
+
+            Returns the buffered lines when the attempt ended without
+            client-visible output (caller decides retry vs give-up); returns
+            None when the attempt already went live (buffer overflow) or the
+            client is gone, in which case nothing is left to decide. Never
+            meters or finalizes: the caller owns that, so every attempt is
+            judged by the same rule.
+            """
+            buffered: list[bytes] = []
+            buffered_bytes = 0
+            live = False
+            outcome = "aborted"
+            try:
+                with resp as r:
+                    for raw in r:
+                        if not ka.alive or _client_gone(handler.wfile):
+                            outcome = "gone"
+                            ka.stop()
+                            break
+                        line = transform(raw) if transform is not None else raw
+                        # Terminal check runs for EVERY line, including the one
+                        # that triggers the buffer-overflow flush below: the
+                        # overflow branch must not swallow a [DONE] sitting on
+                        # that line, or a fully relayed stream meters as aborted.
+                        if is_stream_terminal(line):
+                            outcome = "done"
+                        if not live:
+                            buffered.append(line)
+                            buffered_bytes += len(line)
+                            if buffered_bytes > _RESPONSES_EMPTY_RETRY_CAP:
+                                live = True
+                                if not ka.writelines(buffered):
+                                    outcome = "gone"
+                                    break
+                                buffered = []  # released; live mode never appends again
+                        elif not ka.write(line):
+                            outcome = "gone"
+                            break
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+                trace(
+                    f"{provider}.stream_aborted",
+                    request_id=request_id,
+                    status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
+                )
+                # A cut attempt is discarded, never flushed here: a partial
+                # flush followed by a full later attempt would duplicate events
+                # on the client. Only check whether the client is still around,
+                # for metering.
+                if _client_gone(handler.wfile):
+                    outcome = "gone"
+            if live or outcome == "gone":
+                return outcome, None
+            return outcome, buffered
+
+        # Attempts 1 and 2 run buffered and are discarded when empty; attempt
+        # 3 relays live so the client always sees a terminal outcome after at
+        # most three consecutive tries. One keepalive writer spans everything.
+        waits = _empty_retry_waits()
+        extra = 0
+        outcome, buffered = _run_buffered(response)
+        if buffered is None or outcome == "gone":
+            _meter(outcome, extra)
             _done(outcome)
             return
         if outcome == "done" and _responses_buffer_has_content(buffered):
-            # A dead client must not meter as a 200: the flush is the last
-            # write of a healthy stream, so honor its result.
             if not ka.writelines(buffered):
                 outcome = "gone"
-            _meter(outcome, 0)
+            _meter(outcome, extra)
             _done(outcome)
             return
-        trace(
-            f"{provider}.empty_retry",
-            request_id=request_id,
-            family=family,
-            stream=True,
-            outcome=outcome,
-            lines=len(buffered),
-        )
-        try:
-            response2, retries2 = _open_upstream_stream(req, config, request_id, default_max_retries())
-        except _ConnectFailed as fail:
-            exc = fail.exc
+        last_buffered = buffered
+        last_outcome = outcome
+        for attempt in (2, 3):
+            wait_ms = waits[min(attempt - 2, len(waits) - 1)]
             trace(
-                f"{provider}.empty_retry_failed",
+                f"{provider}.empty_retry",
                 request_id=request_id,
-                status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
+                family=family,
+                stream=True,
+                attempt=attempt,
+                wait_ms=wait_ms,
+                outcome=last_outcome,
+                lines=len(last_buffered),
             )
-            # The retry never produced a stream, so hand the client the
-            # buffered first attempt: it is well-formed (terminal included
-            # when outcome is done) and beats a bare empty 200 SSE body. The
-            # aborted retry still meters as an aborted stream.
-            if buffered:
-                ka.writelines(buffered)
-            _meter("aborted", fail.attempts or 0)
-            _done("aborted")
-            return
-        outcome2 = _relay_stream(response2, handler, request_id, transform, keepalive=ka)
-        _meter(outcome2, 1 + retries2)
-        _done(outcome2, empty_retried=True)
+            time.sleep(wait_ms / 1000.0)
+            if not ka.alive or _client_gone(handler.wfile):
+                _meter("gone", extra)
+                _done("gone")
+                return
+            try:
+                response_n, retries_n = _open_upstream_stream(req, config, request_id, default_max_retries())
+            except _ConnectFailed as fail:
+                exc = fail.exc
+                trace(
+                    f"{provider}.empty_retry_failed",
+                    request_id=request_id,
+                    attempt=attempt,
+                    status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
+                )
+                # The retry never produced a stream, so hand the client the
+                # buffered attempt: it is well-formed (terminal included when
+                # the outcome is done) and beats a bare empty 200 SSE body.
+                # The aborted retry still meters as an aborted stream.
+                if last_buffered:
+                    ka.writelines(last_buffered)
+                _meter("aborted", extra + (fail.attempts or 0))
+                _done("aborted")
+                return
+            extra += 1 + (retries_n or 0)
+            if attempt == 3:
+                break
+            outcome, buffered = _run_buffered(response_n)
+            if buffered is None or outcome == "gone":
+                _meter(outcome, extra)
+                _done(outcome)
+                return
+            if outcome == "done" and _responses_buffer_has_content(buffered):
+                if not ka.writelines(buffered):
+                    outcome = "gone"
+                _meter(outcome, extra)
+                _done(outcome)
+                return
+            last_buffered = buffered if buffered is not None else []
+            last_outcome = outcome
+        outcome3 = _relay_stream(response_n, handler, request_id, transform, keepalive=ka)
+        _meter(outcome3, extra)
+        _done(outcome3, empty_retried=True)
     finally:
         ka.stop()
 
