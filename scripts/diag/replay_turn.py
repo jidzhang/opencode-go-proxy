@@ -57,8 +57,7 @@ def main(argv: list) -> int:
     items = load_items(args.rollout, args.ord_cap)
     if args.drop_orphans:
         from opencode_go_proxy.protocol import drop_dangling_function_calls
-        cleaned, dropped = drop_dangling_function_calls({"input": items})
-        items = cleaned["input"]
+        items, dropped = drop_dangling_function_calls(items)
         print(f"dropped {len(dropped)} dangling call(s): {dropped}", flush=True)
     if args.strip_reasoning:
         from opencode_go_proxy.protocol import drop_reasoning_items

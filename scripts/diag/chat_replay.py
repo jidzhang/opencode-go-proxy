@@ -39,9 +39,9 @@ def main(argv: list) -> int:
         responses_payload_to_chat_payload,
     )
     items = load_items(args.rollout, args.ord_cap)
-    items, _ = drop_dangling_function_calls({"input": items})
+    items, _ = drop_dangling_function_calls(items)
     chat, _, stats = responses_payload_to_chat_payload(
-        {"model": args.model, "input": items["input"]})
+        {"model": args.model, "input": items})
     print("messages:", len(chat["messages"]), "tools:", len(chat.get("tools") or []),
           "stats:", json.dumps(stats)[:200], flush=True)
     body = json.dumps({"model": args.model, "messages": chat["messages"],

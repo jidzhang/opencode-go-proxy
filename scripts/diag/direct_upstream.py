@@ -44,8 +44,7 @@ def main(argv: list) -> int:
     from opencode_go_proxy.opencode_session import opencode_session_headers
 
     items = load_items(args.rollout, args.ord_cap)
-    items, _ = drop_dangling_function_calls({"input": items})
-    items = items["input"]
+    items, _ = drop_dangling_function_calls(items)
     payload = {"model": args.model, "input": items, "stream": False, "max_output_tokens": 16}
     body = json.dumps(payload).encode()
     headers = {"content-type": "application/json", "authorization": "Bearer " + key,

@@ -52,3 +52,34 @@ class TestDropDangling:
                  {"type": "function_call_output", "id": "o", "call_id": "only-id", "output": "ok"}]
         cleaned, dropped = drop_dangling_function_calls(items)
         assert cleaned is items and dropped == []
+
+
+class TestStripMessagePhase:
+    def test_strips_phase_keeps_rest(self) -> None:
+        from opencode_go_proxy.protocol import strip_message_phase
+
+        items = [
+            {"type": "message", "role": "assistant", "phase": "commentary",
+             "content": [{"type": "output_text", "text": "hi"}]},
+            {"type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "yo"}]},
+        ]
+        cleaned, n = strip_message_phase(items)
+        assert n == 1
+        assert "phase" not in cleaned[0]
+        assert cleaned[0]["content"] == items[0]["content"]
+        assert cleaned[1] is items[1]
+        assert "phase" in items[0]  # input never mutated
+
+    def test_no_phase_no_copy(self) -> None:
+        from opencode_go_proxy.protocol import strip_message_phase
+
+        items = [{"type": "message", "role": "user", "content": "x"}]
+        cleaned, n = strip_message_phase(items)
+        assert cleaned is items and n == 0
+
+    def test_non_list_passthrough(self) -> None:
+        from opencode_go_proxy.protocol import strip_message_phase
+
+        for bad in ("text", None, 42):
+            assert strip_message_phase(bad) == (bad, 0)

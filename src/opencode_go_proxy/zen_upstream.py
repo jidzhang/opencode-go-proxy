@@ -60,6 +60,7 @@ from .protocol import (
     maybe_detox_payload,
     responses_tools_to_function_tools,
     restore_namespaced_function_calls,
+    strip_message_phase,
 )
 from .secrets import resolve_api_key
 from .streaming import (
@@ -1931,6 +1932,17 @@ def handle_family_responses_request(
                 model=model,
                 dropped=dropped_ids,
             )
+    cleaned_phase, stripped = strip_message_phase(payload.get("input"))
+    if stripped:
+        payload = dict(payload)
+        payload["input"] = cleaned_phase
+        trace(
+            "request.phase_stripped",
+            request_id=request_id,
+            provider=provider,
+            model=model,
+            stripped=stripped,
+        )
 
     if payload.get("stream") is not True:
         try:
