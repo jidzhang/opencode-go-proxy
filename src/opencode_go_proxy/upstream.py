@@ -215,7 +215,16 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
                 upstream_status=exc.code,
                 body=body,
             ) from exc
-        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+        except TimeoutError:
+            trace("upstream.timeout", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
+            if retries < max_retries:
+                retries += 1
+                trace("upstream.retry", request_id=request_id, attempt=retries, reason="timeout")
+                retry_sleep(retries)
+                continue
+            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None
+
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
@@ -225,14 +234,6 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
-        except TimeoutError:
-            trace("upstream.timeout", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
-            if retries < max_retries:
-                retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, reason="timeout")
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None
 
 
 def call_upstream_chat_verbatim(
@@ -279,7 +280,16 @@ def call_upstream_chat_verbatim(
             if normalized is not None:
                 body = normalized
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), (exc.headers or {}).get("retry-after")
-        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+        except TimeoutError:
+            trace("upstream.timeout", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
+            if retries < max_retries:
+                retries += 1
+                trace("upstream.retry", request_id=request_id, attempt=retries, reason="timeout")
+                retry_sleep(retries)
+                continue
+            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None
+
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
@@ -289,11 +299,3 @@ def call_upstream_chat_verbatim(
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
-        except TimeoutError:
-            trace("upstream.timeout", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
-            if retries < max_retries:
-                retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, reason="timeout")
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None

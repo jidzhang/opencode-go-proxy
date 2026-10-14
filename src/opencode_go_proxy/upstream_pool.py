@@ -46,6 +46,8 @@ from .errors import env_flag
 POOL_ENV = "OPENCODE_GO_PROXY_POOL"
 POOL_SIZE_ENV = "OPENCODE_GO_PROXY_POOL_SIZE"
 POOL_IDLE_ENV = "OPENCODE_GO_PROXY_POOL_IDLE_SEC"
+POOL_REPORT_ENV = "OPENCODE_GO_PROXY_POOL_REPORT_EVERY"
+_DEFAULT_REPORT_EVERY = 100
 
 _DEFAULT_SIZE = 8
 _DEFAULT_IDLE_SEC = 60.0
@@ -65,6 +67,8 @@ _STALE_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 _lock = threading.Lock()
+# Best-effort opens counter for periodic reporting (exactness irrelevant).
+_opens_since_report = 0
 # key -> list of (connection, last_returned_monotonic)
 _pools: dict[tuple[Any, ...], list[tuple[Any, float]]] = {}
 _installed = False
@@ -343,7 +347,9 @@ def _pooled_do_open(
         else:
             with _lock:
                 _stat_reused += 1
-            return _wrap(req, key, conn, resp)
+            wrapped = _wrap(req, key, conn, resp)
+            _note_open()
+            return wrapped
 
     conn = http_class(host, timeout=timeout, **http_conn_args)
     try:
@@ -360,7 +366,32 @@ def _pooled_do_open(
         raise
     with _lock:
         _stat_fresh += 1
-    return _wrap(req, key, conn, resp)
+    wrapped = _wrap(req, key, conn, resp)
+    _note_open()
+    return wrapped
+
+
+def _report_every() -> int:
+    """Opens between ``upstream.pool`` trace reports."""
+    try:
+        return max(1, int(os.environ.get(POOL_REPORT_ENV, str(_DEFAULT_REPORT_EVERY))))
+    except ValueError:
+        return _DEFAULT_REPORT_EVERY
+
+
+def _note_open() -> None:
+    """Trace pool counters every N successful opens.
+
+    Answers "was pooling worth it" from the logs without a separate
+    dashboard: fresh vs reused counts plus idle holdings.
+    """
+    global _opens_since_report
+    _opens_since_report += 1
+    if _opens_since_report >= _report_every():
+        _opens_since_report = 0
+        from .trace import trace
+
+        trace("upstream.pool", **pool_stats())
 
 
 def _wrap(

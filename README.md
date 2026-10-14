@@ -535,7 +535,9 @@ All flags have environment variable defaults:
 Upstream connections are pooled with keep-alive by default (no flag needed).
 `OPENCODE_GO_PROXY_POOL=0` disables pooling, `OPENCODE_GO_PROXY_POOL_SIZE`
 (default `8`) caps idle connections per origin, `OPENCODE_GO_PROXY_POOL_IDLE_SEC`
-(default `60`) expires them. Tracing is async and non-blocking by default;
+(default `60`) expires them. Pool counters (`fresh`/`reused`/`idle`) are
+traced as `upstream.pool` every `OPENCODE_GO_PROXY_POOL_REPORT_EVERY` opens
+(default `100`). Tracing is async and non-blocking by default;
 `OPENCODE_GO_PROXY_TRACE=0` turns it off.
 
 The proxy accepts both `/responses` and `/v1/responses`.

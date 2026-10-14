@@ -19,6 +19,16 @@ PROXY_LOG=/tmp/proxy19999.log
   sleep "$DELAY_SECS"
   # [o] trick: match target cmdlines but never our own invoker line.
   pkill -f "[o]pencode-go-proxy --bind 127.0.0.1 --port ${PORT}" 2>/dev/null
+  # Restart-time log rotation: the proxy appends stderr here for its whole
+  # lifetime, so cap it at 5 generations on every restart. (No logrotate
+  # dependency; restarts already happen on every update.)
+  if [ -f "$PROXY_LOG" ]; then
+    rm -f "${PROXY_LOG}.5"
+    for n in 4 3 2 1; do
+      [ -f "${PROXY_LOG}.${n}" ] && mv "${PROXY_LOG}.${n}" "${PROXY_LOG}.$((n + 1))"
+    done
+    mv "$PROXY_LOG" "${PROXY_LOG}.1"
+  fi
   for _ in $(seq 1 50); do
     if ! curl -s -m 1 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then break; fi
     sleep 0.2

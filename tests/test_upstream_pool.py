@@ -267,6 +267,39 @@ class TestKeepAliveReuse:
             assert len(FakeConn.instances) == 1  # second turn reused it
 
 
+class TestPoolReporting:
+    def setup_method(self) -> None:
+        pool.reset_pool()
+        pool._opens_since_report = 0
+        FakeConn.instances.clear()
+        FakeConn.next_failures.clear()
+        FakeConn.resp_kwargs = {}
+
+    def teardown_method(self) -> None:
+        pool.reset_pool()
+        pool._opens_since_report = 0
+        FakeConn.instances.clear()
+        FakeConn.next_failures.clear()
+        FakeConn.resp_kwargs = {}
+
+    def test_report_every_n_opens(self) -> None:
+        with mock.patch.dict(os.environ, {pool.POOL_REPORT_ENV: "3"}):
+            with mock.patch("opencode_go_proxy.trace.trace") as traced:
+                handler = pool.PooledHTTPSHandler()
+                for _ in range(3):
+                    resp = handler.do_open(FakeConn, _make_request())
+                    resp.read()
+                    resp.close()
+        kinds = [c.args[0] for c in traced.call_args_list]
+        assert kinds.count("upstream.pool") == 1
+        payload = traced.call_args_list[kinds.index("upstream.pool")].kwargs
+        assert payload["fresh_connections"] + payload["reused_connections"] == 3
+
+    def test_report_env_fallback_on_garbage(self) -> None:
+        with mock.patch.dict(os.environ, {pool.POOL_REPORT_ENV: "bogus"}):
+            assert pool._report_every() == 100
+
+
 class TestTraceAsync:
     def test_disabled_trace_emits_nothing(self) -> None:
         with mock.patch.dict(os.environ, {trace_mod.TRACE_ENV: "0"}):

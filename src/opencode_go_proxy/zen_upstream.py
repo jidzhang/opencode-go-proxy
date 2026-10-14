@@ -417,7 +417,16 @@ def _zen_post(
                 },
                 body=body,
             ) from exc
-        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+        except TimeoutError:
+            trace(f"{provider}.timeout", request_id=request_id, timeout=config.timeout_sec)
+            if retries < max_retries:
+                retries += 1
+                trace(f"{provider}.retry", request_id=request_id, attempt=retries, reason="timeout")
+                retry_sleep(retries)
+                continue
+            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, f"{provider} upstream timeout", retries=retries) from None
+
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace(f"{provider}.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
@@ -427,14 +436,6 @@ def _zen_post(
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"{provider} upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
-        except TimeoutError:
-            trace(f"{provider}.timeout", request_id=request_id, timeout=config.timeout_sec)
-            if retries < max_retries:
-                retries += 1
-                trace(f"{provider}.retry", request_id=request_id, attempt=retries, reason="timeout")
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, f"{provider} upstream timeout", retries=retries) from None
 
 
 def _zen_post_verbatim(
@@ -478,7 +479,16 @@ def _zen_post_verbatim(
                 body = normalized
             retry_after = exc.headers.get("retry-after") if exc.headers else None
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), retry_after
-        except (urllib.error.URLError, ConnectionError, http.client.HTTPException) as exc:
+        except TimeoutError:
+            trace("zen.timeout", request_id=request_id, timeout=config.timeout_sec)
+            if retries < max_retries:
+                retries += 1
+                trace("zen.retry", request_id=request_id, attempt=retries, reason="timeout")
+                retry_sleep(retries)
+                continue
+            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "zen upstream timeout", retries=retries) from None
+
+        except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("zen.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
@@ -488,14 +498,6 @@ def _zen_post_verbatim(
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"zen upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
-        except TimeoutError:
-            trace("zen.timeout", request_id=request_id, timeout=config.timeout_sec)
-            if retries < max_retries:
-                retries += 1
-                trace("zen.retry", request_id=request_id, attempt=retries, reason="timeout")
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "zen upstream timeout", retries=retries) from None
 
 
 def _zen_tokens(value: Json, family: str) -> tuple[Any, Any, Any]:
