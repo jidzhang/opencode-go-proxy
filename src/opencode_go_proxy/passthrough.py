@@ -218,7 +218,7 @@ def relay_native_request(handler: Any, payload: Json, config: ProxyConfig, reque
             duration_ms=int((time.time() - started) * 1000), provider=NATIVE_PROVIDER,
         )
         return
-    except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as exc:
+    except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as exc:
         # RemoteDisconnected (upstream closed before response headers) belongs in
         # the transient bucket: it is a ConnectionResetError/BadStatusLine hybrid,
         # not a URLError, and used to escape as an unhandled crash.

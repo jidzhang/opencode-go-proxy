@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -223,7 +224,7 @@ def _handle_go_verbatim_request(
                 retry_sleep(retries)
                 continue
             break
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
             if retries < max_retries:
                 retries += 1
                 retry_sleep(retries)

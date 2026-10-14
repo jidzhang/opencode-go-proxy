@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- Map every network exception reachable from `urlopen` (notably
+  `ssl.SSLError` and bare `http.client` failures) into the standard
+  retry-then-502/504 path: 50 `SSLV3_ALERT_BAD_RECORD_MAC` and 24
+  `RemoteDisconnected` escapes previously surfaced as 500 proxy crashes.
+  Timeout keeps its distinct 504 mapping.
+- Restart-time proxy log rotation (keep 5 generations) in
+  `scripts/diag/restart_proxy.sh`; the stderr log is otherwise unbounded.
+- Trace `upstream.pool` counters (fresh/reused/idle) every
+  `OPENCODE_GO_PROXY_POOL_REPORT_EVERY` opens (default 100) so keep-alive
+  savings are observable from the logs.
+
 ### Added
 
 - Upstream keep-alive connection pool (`src/opencode_go_proxy/upstream_pool.py`,

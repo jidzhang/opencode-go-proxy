@@ -205,13 +205,11 @@ def _open_upstream_stream(
                 retry_sleep(attempts)
                 continue
             raise _ConnectFailed(exc, attempts, body.encode("utf-8", errors="replace")) from exc
-        except (
-            urllib.error.URLError,
-            TimeoutError,
-            ConnectionError,
-            http.client.HTTPException,
-        ) as exc:
-            # Transient connect-phase failures, incl. RemoteDisconnected (a
+        except (OSError, http.client.HTTPException) as exc:
+            # Transient connect-phase failures. OSError covers URLError,
+            # timeouts, connection resets, and SSLError (e.g. a bad-record-mac
+            # blip that used to escape as an unhandled crash); HTTPException
+            # covers the pure-http.client failures incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if attempts < max_retries:
