@@ -32,8 +32,7 @@ def load_units(rollout: str, cap: int) -> list:
     """Group items into units; each call travels with its output."""
     from opencode_go_proxy.protocol import drop_dangling_function_calls
     items = load_items(rollout, cap)
-    items, _ = drop_dangling_function_calls({"input": items})
-    items = items["input"]
+    items, _ = drop_dangling_function_calls(items)
     by_call: dict = {}
     for i, p in enumerate(items):
         if isinstance(p, dict) and p.get("type") in ("function_call", "function_call_output"):

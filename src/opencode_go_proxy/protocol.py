@@ -758,6 +758,30 @@ def maybe_detox_payload(payload: Json, status: Any, body: Any) -> tuple[Json, st
     return detoxed, ref, dropped
 
 
+def strip_message_phase(input_value: Any) -> tuple[Any, int]:
+    """Drop the Codex-internal ``phase`` marker from input items.
+
+    ``phase`` (e.g. ``"commentary"``) is app UI metadata, not part of the
+    Responses contract, and the proxy used to forward it verbatim. A
+    ``commentary``-phase assistant message followed by a user message makes
+    the strict gateway reject the whole turn with a generic
+    ``invalid_request_error``; without ``phase`` the identical turn is
+    accepted. Returns the (possibly unchanged) input and the stripped count.
+    """
+    if not isinstance(input_value, list):
+        return input_value, 0
+    cleaned: list[Any] = []
+    stripped = 0
+    for item in input_value:
+        if isinstance(item, dict) and "phase" in item:
+            item = {k: v for k, v in item.items() if k != "phase"}
+            stripped += 1
+        cleaned.append(item)
+    if not stripped:
+        return input_value, 0
+    return cleaned, stripped
+
+
 def drop_reasoning_items(payload: Json) -> tuple[Json, int]:
     """Return ``(payload, dropped_count)`` without ``type == "reasoning"`` items.
 
