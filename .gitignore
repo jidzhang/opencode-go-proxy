@@ -18,3 +18,6 @@ caller-token.txt
 
 # Local runtime logs and request dumps (machine-local).
 logs/
+
+# Local-only diag helpers (kept in tree, never committed).
+scripts/diag/turns_report.py
