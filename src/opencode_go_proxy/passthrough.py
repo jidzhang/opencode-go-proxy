@@ -129,6 +129,28 @@ def _relay_status(handler: Any, status: int, content_type: str, body: bytes, hea
     handler.wfile.write(body)
     handler.wfile.flush()
 
+def _write_empty_stream_error(ka: KeepaliveWriter) -> bool:
+    """Terminate a contentless stream with an explicit client-visible error.
+
+    Replaces the former silent empty completion: a well-formed empty turn made
+    agents log "no text, no tool calls, no usage" and stop mid-task as if the
+    work were done. The ``response.error`` shape matches the established zen
+    error terminal, so SSE-heads-already-committed clients surface a failure.
+    """
+    event: dict[str, Any] = {
+        "type": "response.error",
+        "error": {
+            "code": "empty_stream",
+            "message": "upstream stream ended without any output (empty after retries)",
+        },
+    }
+    payload = (
+        b"data: " + json.dumps(event, separators=(",", ":")).encode("utf-8") + b"\n\n"
+        b"data: [DONE]\n\n"
+    )
+    return ka.write(payload)
+
+
 def _relay_stream(
     response: Any,
     handler: Any,
@@ -136,12 +158,17 @@ def _relay_stream(
     transform_line: Callable[[bytes], bytes] | None = None,
     *,
     keepalive: KeepaliveWriter | None = None,
+    require_content: tuple[bytes, ...] | None = None,
 ) -> str:
     """Relay upstream SSE lines with a keepalive comment thread.
 
     Returns the outcome: "done" when the upstream stream reached its terminal
     marker ([DONE] or response.completed), "aborted" when it ended without
-    one (upstream error or truncation), "gone" when the client disconnected.
+    one (upstream error or truncation), "gone" when the client disconnected,
+    and "exhausted" when ``require_content`` was set and the stream reached
+    its terminal without ever carrying a content marker -- in that case the
+    client receives an explicit ``response.error`` terminal instead of a
+    silent empty completion.
     The 200 head is already committed by the caller in every case, so the
     meter must record the outcome rather than a naive 200. Pass ``keepalive``
     to share one writer across relay attempts; otherwise a private one is
@@ -151,6 +178,7 @@ def _relay_stream(
     if keepalive is None:
         ka.start()
     outcome = "aborted"
+    saw_content = require_content is None
     try:
         with response as resp:
             for line in resp:
@@ -159,6 +187,23 @@ def _relay_stream(
                     break
                 if transform_line is not None:
                     line = transform_line(line)
+                if require_content is not None and not saw_content:
+                    saw_content = any(marker in line for marker in require_content)
+                if (
+                    require_content is not None
+                    and not saw_content
+                    and is_stream_terminal(line)
+                ):
+                    if not _write_empty_stream_error(ka):
+                        outcome = "gone"
+                        trace(
+                            "client.disconnected",
+                            request_id=request_id,
+                            message="client closed connection during stream",
+                        )
+                    else:
+                        outcome = "exhausted"
+                    break
                 if not ka.write(line):
                     outcome = "gone"
                     trace(

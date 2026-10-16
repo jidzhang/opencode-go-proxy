@@ -19,6 +19,7 @@ from typing import Any
 
 from .config import ProxyConfig
 from .errors import ProxyError
+from .opencode_session import opencode_session_headers
 from .protocol import cache_stats_from_usage
 from .quota import record_quota_from_headers
 from .secrets import resolve_api_key
@@ -139,19 +140,28 @@ def record_cache(tracker: Any, model: str | None, usage: Any) -> None:
     tracker.record(model or "unknown", stats["hit"], stats["miss"])
 
 
-def _chat_request(url: str, api_key: str, raw_payload: bytes, accept: str) -> urllib.request.Request:
-    """Build the one upstream chat-completions request shape both clients share."""
-    return urllib.request.Request(
-        url,
-        data=raw_payload,
-        headers={
-            "authorization": f"Bearer {api_key}",
-            "content-type": "application/json",
-            "accept": accept,
-            "user-agent": upstream_user_agent(),
-        },
-        method="POST",
-    )
+def _chat_request(
+    url: str,
+    api_key: str,
+    raw_payload: bytes,
+    accept: str,
+    session_headers: dict[str, str] | None = None,
+) -> urllib.request.Request:
+    """Build the one upstream chat-completions request shape both clients share.
+
+    ``session_headers`` carries the stable ``x-opencode-session`` affinity id
+    the Go gateway expects; sub-calls without it (image captioning) are
+    rejected with ``MissingSessionID`` and burn their retry budget.
+    """
+    headers = {
+        "authorization": f"Bearer {api_key}",
+        "content-type": "application/json",
+        "accept": accept,
+        "user-agent": upstream_user_agent(),
+    }
+    if session_headers:
+        headers.update(session_headers)
+    return urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
 
 
 def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str, *, timeout_sec: float | None = None, max_retries: int | None = None) -> tuple[Json, int]:
@@ -162,7 +172,10 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
     max_retries = default_max_retries() if max_retries is None else max_retries
     retries = 0
     while True:
-        request = _chat_request(url, api_key, raw_payload, "application/json")
+        request = _chat_request(
+            url, api_key, raw_payload, "application/json",
+            session_headers=opencode_session_headers(None, chat_payload),
+        )
         trace("upstream.start", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
         started = time.time()
         try:
@@ -265,7 +278,10 @@ def call_upstream_chat_verbatim(
     max_retries = default_max_retries() if max_retries is None else max_retries
     retries = 0
     while True:
-        request = _chat_request(url, api_key, raw_payload, "application/json")
+        request = _chat_request(
+            url, api_key, raw_payload, "application/json",
+            session_headers=opencode_session_headers(None, chat_payload),
+        )
         trace("upstream.start", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
         started = time.time()
         try:

@@ -43,6 +43,24 @@
 
 ### Fixed
 
+- Empty-stream exhaustion no longer ends a Responses-family turn with a
+  silent, valid-but-empty completion: clients logged "no text, no tool
+  calls, and no usage" and the agent stopped mid-task as if the work were
+  done. When the final (third) empty-retry attempt also carries no output,
+  the relay now replaces the contentless terminal with an explicit
+  `response.error` (`code: "empty_stream"`) + `[DONE]`, and the same
+  terminal is used when a retry never connects and every buffered attempt
+  was empty. Both paths meter as 502 instead of a 200, so dashboards and
+  agent UIs show a real failure
+  (`src/opencode_go_proxy/passthrough.py`,
+  `src/opencode_go_proxy/zen_upstream.py`).
+- Chat-completions sub-calls now send the stable `x-opencode-session`
+  affinity header (derived from the payload anchor when the caller supplies
+  no session header, mirroring the compaction path). The Go gateway rejects
+  session-less requests with `MissingSessionID` — observed as ~400
+  rejections on 2026-10-16, three per split-turn image caption, which
+  burned the caption's whole fallback budget on every captioned turn
+  (`src/opencode_go_proxy/upstream.py`, `src/opencode_go_proxy/opencode_session.py`).
 - Gemini payloads whose conversation ends on anything other than a plain
   user text turn — a model turn, a bare `functionResponse` (every post-tool
   request from Claude Code), or a `functionResponse` merged with text — are

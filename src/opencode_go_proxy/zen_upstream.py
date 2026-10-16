@@ -40,7 +40,7 @@ from .meter import (
     note_real_input_tokens,
     record_usage_event,
 )
-from .passthrough import _relay_stream, is_stream_terminal
+from .passthrough import _relay_stream, _write_empty_stream_error, is_stream_terminal
 from .protocol import (
     DEFAULT_MODEL,
     _normalize_image_url,
@@ -2006,11 +2006,14 @@ def _relay_responses_verbatim(
     keepalive comments keep the client from idling, and are discarded when
     they end without client-visible output -- either an empty terminal or a
     mid-stream cut with no terminal marker (the silent-reasoning
-    disconnect). Attempt 3 relays live so the client always sees a terminal
-    outcome. A non-empty buffered attempt flushes byte-identical, so healthy
-    streams are untouched; a buffer overflow also degrades to a plain live
-    relay. One keepalive writer spans all attempts, so no second thread or
-    write lock ever touches the client socket.
+    disconnect). Attempt 3 relays live with content tracking so the client
+    always sees a terminal outcome: if it also ends without client-visible
+    output, the terminal is an explicit ``response.error`` (code
+    ``empty_stream``), not a silent empty completion a client would mistake
+    for a successful no-op turn. A non-empty buffered attempt flushes
+    byte-identical, so healthy streams are untouched; a buffer overflow also
+    degrades to a plain live relay. One keepalive writer spans all attempts,
+    so no second thread or write lock ever touches the client socket.
     """
     transform = _restore_responses_sse_line if restore_namespaces else None
 
@@ -2130,14 +2133,20 @@ def _relay_responses_verbatim(
                     attempt=attempt,
                     status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
                 )
-                # The retry never produced a stream, so hand the client the
-                # buffered attempt: it is well-formed (terminal included when
-                # the outcome is done) and beats a bare empty 200 SSE body.
-                # The aborted retry still meters as an aborted stream.
-                if last_buffered:
+                # The retry never produced a stream. When every attempt so far
+                # was empty there is nothing worth replaying: report an
+                # explicit failure instead of handing the client a well-formed
+                # empty turn it will treat as success.
+                if _responses_buffer_has_content(last_buffered):
                     ka.writelines(last_buffered)
-                _meter("aborted", extra + (fail.attempts or 0))
-                _done("aborted")
+                    _meter("aborted", extra + (fail.attempts or 0))
+                    _done("aborted")
+                elif not _write_empty_stream_error(ka):
+                    _meter("gone", extra + (fail.attempts or 0))
+                    _done("gone")
+                else:
+                    _meter("exhausted", extra + (fail.attempts or 0))
+                    _done("exhausted", empty_retried=True)
                 return
             extra += 1 + (retries_n or 0)
             if attempt == 3:
@@ -2155,7 +2164,11 @@ def _relay_responses_verbatim(
                 return
             last_buffered = buffered if buffered is not None else []
             last_outcome = outcome
-        outcome3 = _relay_stream(response_n, handler, request_id, transform, keepalive=ka)
+        outcome3 = _relay_stream(
+            response_n, handler, request_id, transform,
+            keepalive=ka,
+            require_content=_RESPONSES_CONTENT_MARKERS,
+        )
         _meter(outcome3, extra)
         _done(outcome3, empty_retried=True)
     finally:
