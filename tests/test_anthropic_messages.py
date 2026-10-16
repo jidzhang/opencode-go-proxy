@@ -787,3 +787,327 @@ class TestCountTokensEstimate:
         })
         assert small >= 1
         assert big > small
+
+
+# ---------------------------------------------------------------------------
+# Responses-family translated stream: transparent empty retry
+# ---------------------------------------------------------------------------
+
+
+def _responses_sse(*events: dict) -> bytes:
+    body = b"".join(
+        b"data: " + json.dumps(e, separators=(",", ":")).encode() + b"\n\n" for e in events
+    )
+    return body + b"data: [DONE]\n\n"
+
+
+def _responses_content_stream(text: str = "hello") -> bytes:
+    return _responses_sse(
+        {"type": "response.created", "response": {"id": "r1"}},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "msg_1", "role": "assistant", "content": []},
+        },
+        {"type": "response.output_text.delta", "item_id": "msg_1", "delta": text},
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "id": "msg_1",
+                "content": [{"type": "output_text", "text": text}],
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "r1",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+        },
+    )
+
+
+def _responses_empty_stream() -> bytes:
+    return _responses_sse(
+        {"type": "response.created", "response": {"id": "r0"}},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "r0",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 5, "output_tokens": 0},
+            },
+        },
+    )
+
+
+def _responses_reasoning_only_stream() -> bytes:
+    return _responses_sse(
+        {"type": "response.created", "response": {"id": "r0"}},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "reasoning", "id": "rs_1"},
+        },
+        {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "delta": "hmm"},
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"type": "reasoning", "id": "rs_1", "summary": []},
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "r0",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 5, "output_tokens": 0},
+            },
+        },
+    )
+
+
+def _responses_error_stream() -> bytes:
+    return _responses_sse(
+        {"type": "response.created", "response": {"id": "r0"}},
+        {"type": "response.error", "error": {"message": "boom", "code": "server_error"}},
+    )
+
+
+def _messages_stream_body(model: str = "opencode-go/grok-4.7") -> bytes:
+    return json.dumps({
+        "model": model,
+        "max_tokens": 64,
+        "stream": True,
+        "messages": [{"role": "user", "content": "hi"}],
+    }).encode()
+
+
+def _stream_event_names(raw: bytes) -> list:
+    return [line[7:].decode() for line in raw.split(b"\n") if line.startswith(b"event: ")]
+
+
+class TestResponsesFamilyEmptyRetry:
+    def test_empty_attempt_is_retried_transparently(self, server):
+        port, _ = server
+        env = {"OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS": "0"}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch(
+                 "urllib.request.urlopen",
+                 side_effect=[
+                     MockUpstreamResponse(_responses_empty_stream()),
+                     MockUpstreamResponse(_responses_content_stream()),
+                 ],
+             ) as urlopen:
+            resp, raw = post(port, "/v1/messages", _messages_stream_body())
+
+        assert resp.status == 200
+        assert urlopen.call_count == 2
+        # The discarded empty attempt leaves no trace: exactly one message.
+        assert _stream_event_names(raw).count("message_start") == 1
+        assert _stream_event_names(raw)[-2:] == ["message_delta", "message_stop"]
+        assert b'"text":"hello"' in raw.replace(b" ", b"")
+
+    def test_reasoning_only_attempt_counts_as_empty(self, server):
+        port, _ = server
+        env = {"OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS": "0"}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch(
+                 "urllib.request.urlopen",
+                 side_effect=[
+                     MockUpstreamResponse(_responses_reasoning_only_stream()),
+                     MockUpstreamResponse(_responses_content_stream()),
+                 ],
+             ) as urlopen:
+            resp, raw = post(port, "/v1/messages", _messages_stream_body())
+
+        assert resp.status == 200
+        assert urlopen.call_count == 2
+        assert _stream_event_names(raw).count("message_start") == 1
+
+    def test_three_empties_still_end_with_terminal_message(self, server):
+        port, _ = server
+        env = {"OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS": "0"}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch(
+                 "urllib.request.urlopen",
+                 side_effect=[MockUpstreamResponse(_responses_empty_stream()) for _ in range(3)],
+             ) as urlopen:
+            resp, raw = post(port, "/v1/messages", _messages_stream_body())
+
+        assert resp.status == 200
+        assert urlopen.call_count == 3
+        names = _stream_event_names(raw)
+        assert names[0] == "message_start"
+        assert names[-2:] == ["message_delta", "message_stop"]
+
+    def test_upstream_error_is_delivered_not_retried(self, server):
+        port, _ = server
+        env = {"OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS": "0"}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch(
+                 "urllib.request.urlopen",
+                 return_value=MockUpstreamResponse(_responses_error_stream()),
+             ) as urlopen:
+            resp, raw = post(port, "/v1/messages", _messages_stream_body())
+
+        assert resp.status == 200
+        assert urlopen.call_count == 1
+        assert _stream_event_names(raw) == ["message_start", "error"]
+        assert b"boom" in raw
+
+
+# ---------------------------------------------------------------------------
+# Go google-native family (gemini-4-argon-contributor)
+# ---------------------------------------------------------------------------
+
+
+def _gemini_response_body(text: str = "hi there") -> bytes:
+    return json.dumps({
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": text}]},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 4,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 6,
+        },
+    }).encode()
+
+
+class TestGoGoogleFamily:
+    def test_builder_points_at_go_google_endpoint_with_bearer(self):
+        from opencode_go_proxy.go_models import GOOGLE_GEMINI
+        from opencode_go_proxy.zen_upstream import _build_family_request, go_google_base_url
+
+        url, body, headers = _build_family_request(
+            {"model": "opencode-go/gemini-4-argon-contributor", "input": "hi"},
+            GOOGLE_GEMINI,
+            "gemini-4-argon-contributor",
+            "test-key",
+            stream=False,
+            session_model="opencode-go/gemini-4-argon-contributor",
+            base_url=go_google_base_url(),
+            google_auth="bearer",
+        )
+        assert url == (
+            "https://opencode.ai/inference/go/google/v1beta"
+            "/models/gemini-4-argon-contributor:generateContent"
+        )
+        assert headers["authorization"] == "Bearer test-key"
+        assert "x-goog-api-key" not in headers
+        assert body["contents"][0]["parts"][0]["text"] == "hi"
+
+    def test_builder_stream_url_uses_sse_action(self):
+        from opencode_go_proxy.go_models import GOOGLE_GEMINI
+        from opencode_go_proxy.zen_upstream import _build_family_request, go_google_base_url
+
+        url, _body, _headers = _build_family_request(
+            {"model": "m", "input": "hi"},
+            GOOGLE_GEMINI,
+            "gemini-4-argon-contributor",
+            "test-key",
+            stream=True,
+            session_model="m",
+            base_url=go_google_base_url(),
+            google_auth="bearer",
+        )
+        assert url.endswith("/models/gemini-4-argon-contributor:streamGenerateContent?alt=sse")
+
+    def test_zen_google_still_uses_key_header(self):
+        from opencode_go_proxy.zen_upstream import _build_family_request, zen_base_url
+
+        _url, _body, headers = _build_family_request(
+            {"model": "zen/gemini-4-argon", "input": "hi"},
+            "google_gemini",
+            "gemini-4-argon",
+            "test-key",
+            stream=False,
+            session_model="zen/gemini-4-argon",
+            base_url=zen_base_url(),
+        )
+        assert headers["x-goog-api-key"] == "test-key"
+        assert "authorization" not in headers
+
+    def test_messages_non_stream_returns_anthropic_message(self, server, tmp_path):
+        port, _ = server
+        (tmp_path / "user-models.json").write_text(json.dumps({
+            "version": 1,
+            "models": [{"slug": "gemini-4-argon-contributor", "display_name": "Gemini 4 Argon"}],
+        }))
+        body = json.dumps({
+            "model": "opencode-go/gemini-4-argon-contributor",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hi"}],
+        }).encode()
+        env = {"OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_STATE_DIR": str(tmp_path)}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(_gemini_response_body())):
+            resp, raw = post(port, "/v1/messages", body)
+
+        assert resp.status == 200
+        message = json.loads(raw)
+        assert message["type"] == "message"
+        assert message["content"] == [{"type": "text", "text": "hi there"}]
+        assert message["usage"]["input_tokens"] == 4
+        assert message["usage"]["output_tokens"] == 2
+
+    def test_responses_non_stream_returns_response_object(self, server, tmp_path):
+        port, _ = server
+        (tmp_path / "user-models.json").write_text(json.dumps({
+            "version": 1,
+            "models": [{"slug": "gemini-4-argon-contributor", "display_name": "Gemini 4 Argon"}],
+        }))
+        body = json.dumps({
+            "model": "opencode-go/gemini-4-argon-contributor",
+            "input": "hi",
+        }).encode()
+        env = {"OPENCODE_GO_API_KEY": "test-key", "OPENCODE_GO_PROXY_STATE_DIR": str(tmp_path)}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(_gemini_response_body())):
+            resp, raw = post(port, "/v1/responses", body)
+
+        assert resp.status == 200
+        result = json.loads(raw)
+        assert result["object"] == "response"
+        assert result["output_text"] == "hi there"
+
+
+class TestGeminiSchemaSanitizer:
+    def test_unsupported_keys_stripped_const_becomes_enum(self):
+        from opencode_go_proxy.zen_upstream import _sanitize_gemini_schema
+
+        cleaned = _sanitize_gemini_schema({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "a": {"const": "z", "type": "string", "default": "z"},
+                "b": {"$ref": "#/x", "one_of": [{"type": "string"}], "type": "integer"},
+            },
+            "required": ["a"],
+        })
+        assert cleaned == {
+            "type": "object",
+            "properties": {
+                "a": {"enum": ["z"], "type": "string"},
+                "b": {"type": "integer"},
+            },
+            "required": ["a"],
+        }
+
+    def test_lists_recursed_scalars_untouched(self):
+        from opencode_go_proxy.zen_upstream import _sanitize_gemini_schema
+
+        assert _sanitize_gemini_schema({"items": [{"$id": "x", "type": "string"}, 1, "s"]}) == {
+            "items": [{"type": "string"}, 1, "s"]
+        }

@@ -37,6 +37,7 @@ from .go_upstream import (
     _client_status,
     _network_error,
     _resolve_go_key,
+    go_family_target,
     go_request_identity,
     handle_go_messages_request,
 )
@@ -53,7 +54,9 @@ from .trace import trace
 from .upstream import default_max_retries
 from .zen_upstream import (
     _build_family_request,
+    _empty_retry_waits,
     _relay_upstream_error,
+    _responses_buffer_has_content,
     _send_json,
     _ZenStreamEngine,
     call_family_responses,
@@ -779,6 +782,7 @@ def handle_anthropic_messages_request(
         stream=responses_payload.get("stream") is True,
     )
     extra_headers = opencode_session_headers(handler.headers, responses_payload)
+    base_url, google_auth = go_family_target(family, config)
 
     if responses_payload.get("stream") is not True:
         result = call_family_responses(
@@ -789,11 +793,12 @@ def handle_anthropic_messages_request(
             bare_id=bare_id,
             family=family,
             api_key=api_key,
-            base_url=config.chat_base_url,
+            base_url=base_url,
             provider=GO_PROVIDER,
             extra_headers=extra_headers,
             function_tools_only=True,
             caption_images=True,
+            google_auth=google_auth,
         )
         _send_json(handler, responses_to_anthropic_message(result, model))
         return
@@ -805,12 +810,13 @@ def handle_anthropic_messages_request(
         api_key,
         stream=True,
         session_model=model,
-        base_url=config.chat_base_url,
+        base_url=base_url,
         extra_headers=extra_headers,
         function_tools_only=True,
         caption_images=True,
         config=config,
         request_id=request_id,
+        google_auth=google_auth,
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
@@ -855,9 +861,17 @@ def handle_anthropic_messages_request(
 
     if family == "openai_responses":
         # The Responses family relays verbatim upstream SSE; translate the
-        # event dicts live. (No empty-stream retry on this path in Phase 1.)
+        # event dicts, with the same transparent empty-stream retry the
+        # verbatim /v1/responses surface gets (attempts 1-2 buffered).
         _relay_responses_stream_translated(
-            handler, response, retries, model=model, request_id=request_id, started=started
+            handler,
+            response,
+            retries,
+            model=model,
+            request_id=request_id,
+            started=started,
+            req=req,
+            config=config,
         )
         return
 
@@ -881,24 +895,31 @@ def handle_anthropic_messages_request(
         engine._stop_keepalive()
 
 
-def _relay_responses_stream_translated(
-    handler: Any,
-    response: Any,
-    retries: int,
-    *,
-    model: str,
-    request_id: str,
-    started: float,
-) -> None:
-    """Translate one open Responses-family SSE stream to Anthropic events.
+class _FrameBuffer:
+    """Collect translated SSE frames in memory for one buffered attempt."""
 
-    The HTTP SSE head is already committed. Lines parse to Responses event
-    dicts and feed the shared translator; the terminal outcome meters exactly
-    like the verbatim relay (200 done, 0 client-gone, 502 aborted).
+    def __init__(self) -> None:
+        self.frames: list[bytes] = []
+
+    def __call__(self, data: bytes) -> bool:
+        self.frames.append(data)
+        return True
+
+
+def _feed_translated_stream(
+    response: Any,
+    translator: ResponsesToAnthropicStream,
+    ka: KeepaliveWriter,
+    request_id: str,
+    raw_sink: list[bytes] | None = None,
+) -> str:
+    """Feed one open Responses SSE body into the translator.
+
+    Returns the terminal outcome (``done`` / ``gone`` / ``aborted``) with
+    the same finish/error tail the live relay always had; metering and the
+    client socket belong to the caller. When ``raw_sink`` is given, every
+    raw upstream line is also appended to it for the empty-content check.
     """
-    ka = KeepaliveWriter(handler)
-    translator = ResponsesToAnthropicStream(ka.write, model)
-    ka.start()
     outcome = "aborted"
     try:
         with response as resp:
@@ -906,6 +927,8 @@ def _relay_responses_stream_translated(
                 if not ka.alive or not translator.alive:
                     outcome = "gone"
                     break
+                if raw_sink is not None:
+                    raw_sink.append(raw_line)
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
                     continue
@@ -942,21 +965,124 @@ def _relay_responses_stream_translated(
         )
         if translator.alive:
             translator.emit_error("upstream stream aborted")
+    return outcome
+
+
+def _relay_responses_stream_translated(
+    handler: Any,
+    response: Any,
+    retries: int,
+    *,
+    model: str,
+    request_id: str,
+    started: float,
+    req: urllib.request.Request,
+    config: ProxyConfig,
+) -> None:
+    """Translate one Responses-family SSE stream to Anthropic events.
+
+    The HTTP SSE head is already committed. Up to three consecutive attempts:
+    attempts 1 and 2 translate into a frame buffer that is discarded when the
+    attempt ends without client-visible output (empty terminal or a cut
+    stream) and flushed byte-identical otherwise; attempt 3 translates live
+    so the client always sees a terminal outcome. Reasoning-only attempts
+    count as empty, matching the verbatim relay. The terminal outcome meters
+    exactly like the verbatim relay (200 done, 0 client-gone, 502 aborted).
+    """
+    ka = KeepaliveWriter(handler)
+    ka.start()
+
+    def _meter(outcome: str, extra_retries: int) -> None:
+        total = retries + extra_retries
+        status = 200 if outcome == "done" else 0 if outcome == "gone" else 502
+        record_usage_event(
+            model=model,
+            status=status,
+            duration_ms=int((time.time() - started) * 1000),
+            stream_aborted=outcome != "done",
+            retries=total or None,
+            provider=GO_PROVIDER,
+        )
+
+    def _done(outcome: str, **extra: Any) -> None:
+        trace(
+            f"{GO_PROVIDER}.done",
+            request_id=request_id,
+            family="openai_responses",
+            stream=True,
+            outcome=outcome,
+            **extra,
+        )
+
+    waits = _empty_retry_waits()
+    current = response
+    extra = 0
+    try:
+        for attempt in (1, 2, 3):
+            if attempt == 3:
+                translator = ResponsesToAnthropicStream(ka.write, model)
+                outcome = _feed_translated_stream(current, translator, ka, request_id)
+                _meter(outcome, extra)
+                _done(outcome, empty_retried=True)
+                return
+            buf = _FrameBuffer()
+            raw_lines: list[bytes] = []
+            translator = ResponsesToAnthropicStream(buf, model)
+            outcome = _feed_translated_stream(current, translator, ka, request_id, raw_lines)
+            if outcome == "gone":
+                _meter("gone", extra)
+                _done("gone")
+                return
+            if translator.errored:
+                # An upstream terminal error is delivered, never retried.
+                ka.writelines(buf.frames)
+                _meter("aborted", extra)
+                _done("aborted")
+                return
+            if outcome == "done" and _responses_buffer_has_content(raw_lines):
+                if not ka.writelines(buf.frames):
+                    outcome = "gone"
+                _meter(outcome, extra)
+                _done(outcome)
+                return
+            wait_ms = waits[min(attempt - 1, len(waits) - 1)]
+            trace(
+                f"{GO_PROVIDER}.empty_retry",
+                request_id=request_id,
+                family="openai_responses",
+                stream=True,
+                attempt=attempt + 1,
+                wait_ms=wait_ms,
+                outcome=outcome,
+                lines=len(raw_lines),
+            )
+            time.sleep(wait_ms / 1000.0)
+            if not ka.alive:
+                _meter("gone", extra)
+                _done("gone")
+                return
+            try:
+                current, retries_n = _open_upstream_stream(
+                    req, config, request_id, default_max_retries()
+                )
+            except _ConnectFailed as fail:
+                exc = fail.exc
+                trace(
+                    f"{GO_PROVIDER}.empty_retry_failed",
+                    request_id=request_id,
+                    attempt=attempt + 1,
+                    status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
+                )
+                # The retry never produced a stream, so hand the client the
+                # buffered attempt: translator.finish() already ran inside
+                # the feed (or runs now for a cut attempt), so the frames
+                # are a well-formed Anthropic message either way.
+                if not translator.finished and not translator.errored and translator.alive:
+                    translator.finish()
+                ka.writelines(buf.frames)
+                _meter("aborted", extra + (fail.attempts or 0))
+                _done("aborted")
+                return
+            extra += 1 + (retries_n or 0)
     finally:
         ka.stop()
-    status = 200 if outcome == "done" else 0 if outcome == "gone" else 502
-    record_usage_event(
-        model=model,
-        status=status,
-        duration_ms=int((time.time() - started) * 1000),
-        stream_aborted=outcome != "done",
-        retries=retries or None,
-        provider=GO_PROVIDER,
-    )
-    trace(
-        f"{GO_PROVIDER}.done",
-        request_id=request_id,
-        family="openai_responses",
-        stream=True,
-        outcome=outcome,
-    )

@@ -827,7 +827,89 @@ class TestGeminiFamily:
             "role": "user",
             "parts": [{"functionResponse": {"name": "read_file", "response": {"value": "file contents"}}}],
         }
+        # The Go Google gateway requires the conversation to end with a plain
+        # user text turn; the builder appends one after a functionResponse tail.
+        assert body["contents"][3] == {"role": "user", "parts": [{"text": "Continue."}]}
         assert body["tools"][0]["functionDeclarations"][0]["name"] == "read_file"
+
+    def test_payload_debug_shape(self) -> None:
+        payload = {
+            "model": "zen/gemini-3-pro",
+            "input": [
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+                {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": '{"path":"/tmp/x"}'},
+                {"type": "function_call_output", "call_id": "call_1", "output": "file contents"},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "description": "Read a file.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        }
+        body = zen_upstream.responses_payload_to_gemini_payload(payload)
+        shape = zen_upstream.gemini_payload_debug(body)
+        # Declarations include the codex_app snapshot merged in by
+        # responses_tools_to_chat_tools; the payload's own tool must be present.
+        assert "read_file" in shape["declarations"]
+        assert shape["function_calls"] == ["read_file"]
+        assert shape["function_responses"] == ["read_file"]
+        roles = [content["role"] for content in shape["contents"]]
+        assert roles == ["user", "model", "user", "user"]
+
+    def test_gemini_user_text_tail(self) -> None:
+        def payload_for(items: list[dict]) -> dict:
+            return {"model": "zen/gemini-3-pro", "input": items}
+
+        def msg(role: str, text: str) -> dict:
+            return {"type": "message", "role": role, "content": [{"type": "input_text", "text": text}]}
+
+        # Tool-result tail gets a separate trailing user text turn: the Go
+        # Google gateway 400s (empty body) on a functionResponse tail.
+        body = zen_upstream.responses_payload_to_gemini_payload(
+            payload_for(
+                [
+                    msg("user", "hi"),
+                    {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+                ]
+            )
+        )
+        assert [content["role"] for content in body["contents"]] == ["user", "model", "user", "user"]
+        assert body["contents"][2]["parts"] == [
+            {"functionResponse": {"name": "read_file", "response": {"value": "ok"}}}
+        ]
+        assert body["contents"][3] == {"role": "user", "parts": [{"text": "Continue."}]}
+
+        # A tool result merged with user text into one content (same-role
+        # merge) still gets the tail as a separate content, never merged
+        # into the functionResponse-bearing content.
+        body = zen_upstream.responses_payload_to_gemini_payload(
+            payload_for(
+                [
+                    msg("user", "hi"),
+                    {"type": "function_call", "call_id": "call_1", "name": "read_file", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "call_1", "output": "ok"},
+                    msg("user", "and then?"),
+                ]
+            )
+        )
+        assert body["contents"][-1] == {"role": "user", "parts": [{"text": "Continue."}]}
+        merged = body["contents"][-2]
+        assert merged["role"] == "user"
+        assert {"functionResponse": {"name": "read_file", "response": {"value": "ok"}}} in merged["parts"]
+        assert {"text": "and then?"} in merged["parts"]
+
+        # A plain user text tail is left untouched.
+        body = zen_upstream.responses_payload_to_gemini_payload(
+            payload_for([msg("user", "hi"), msg("assistant", "hello"), msg("user", "next question")])
+        )
+        assert [content["role"] for content in body["contents"]] == ["user", "model", "user"]
+        assert body["contents"][-1]["parts"] == [{"text": "next question"}]
 
     def test_stream_back_translation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _fake_key(monkeypatch)

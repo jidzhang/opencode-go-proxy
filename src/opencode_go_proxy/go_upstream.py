@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import ProxyConfig
 from .errors import ProxyError
-from .go_models import ANTHROPIC_MESSAGES, OPENAI_CHAT, go_family_for
+from .go_models import ANTHROPIC_MESSAGES, GOOGLE_GEMINI, OPENAI_CHAT, go_family_for
 from .meter import record_usage_event
 from .opencode_session import opencode_session_headers
 from .passthrough import _relay_stream
@@ -30,6 +30,7 @@ from .upstream_headers import upstream_user_agent
 from .zen_upstream import (
     ANTHROPIC_VERSION,
     _relay_upstream_error,
+    go_google_base_url,
     handle_family_responses_request,
 )
 
@@ -98,6 +99,13 @@ def _resolve_go_key(
         raise
 
 
+def go_family_target(family: str, config: ProxyConfig) -> tuple[str, str]:
+    """Return ``(base_url, google_auth)`` for one certified Go family."""
+    if family == GOOGLE_GEMINI:
+        return go_google_base_url(), "bearer"
+    return config.chat_base_url, "key"
+
+
 def handle_go_responses_request(
     handler: Any,
     payload: Json,
@@ -108,6 +116,7 @@ def handle_go_responses_request(
     started = time.time()
     model = payload.get("model") or DEFAULT_MODEL
     bare_id, family = go_request_identity(model)
+    base_url, google_auth = go_family_target(family, config)
     handle_family_responses_request(
         handler,
         payload,
@@ -117,12 +126,13 @@ def handle_go_responses_request(
         bare_id=bare_id,
         family=family,
         api_key=_resolve_go_key(config, request_id, model, started),
-        base_url=config.chat_base_url,
+        base_url=base_url,
         provider=GO_PROVIDER,
         extra_headers=opencode_session_headers(handler.headers, payload),
         function_tools_only=True,
         restore_namespaces=True,
         caption_images=True,
+        google_auth=google_auth,
     )
 
 
