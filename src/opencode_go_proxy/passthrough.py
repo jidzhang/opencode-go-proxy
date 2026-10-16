@@ -21,7 +21,7 @@ from typing import Any
 
 from .config import ProxyConfig
 from .errors import ProxyError
-from .guards import caller_bearer_matches
+from .guards import caller_bearer_matches, caller_xapi_key_matches
 from .meter import record_usage_event
 from .streaming import KeepaliveWriter
 from .trace import trace
@@ -79,17 +79,22 @@ def _forwarded_headers(handler: Any) -> dict[str, str]:
         value = handler.headers.get(name)
         if value:
             headers[name] = value
-    # Never forward a caller-token Bearer to the native backend: generic
-    # clients (zcode) authenticate remote proxy access via Authorization
-    # because they cannot send the custom X-OpenCode-Go-Proxy-Token header.
-    # That value is a proxy capability, not a provider credential, so a
-    # native-model request carrying it must fail closed, not leak it.
-    if caller_bearer_matches(handler.headers):
-        headers.pop("authorization", None)
     for name, value in handler.headers.items():
         lowered = name.lower()
         if lowered.startswith("x-") and not lowered.startswith("x-opencode-go-"):
             headers[lowered] = value
+    # Never forward a caller-token Bearer or x-api-key to the native backend:
+    # generic clients (zcode via Authorization Bearer, Claude Code via
+    # x-api-key) authenticate remote proxy access with the caller token in
+    # place of the custom X-OpenCode-Go-Proxy-Token header they cannot send.
+    # That value is a proxy capability, not a provider credential, so a
+    # native-model request carrying it must fail closed, not leak it. The
+    # pops run after the x-* loop above so a stripped x-api-key cannot be
+    # re-added by it.
+    if caller_bearer_matches(handler.headers):
+        headers.pop("authorization", None)
+    if caller_xapi_key_matches(handler.headers):
+        headers.pop("x-api-key", None)
     return headers
 
 

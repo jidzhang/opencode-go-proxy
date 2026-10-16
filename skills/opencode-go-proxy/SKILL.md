@@ -1,14 +1,16 @@
 ---
 name: opencode-go-proxy
-description: Orientation for using the opencode-go-proxy bridge, which lets the Codex app use the OpenCode Go subscription (13 open coding models) through a local Python service with one runtime dependency (zstandard). Explains how traffic flows, how to start and stop the proxy (menu bar app or CLI, single port 8787), the operational commands (doctor, smoke-test, support-bundle), how prefix caching works and how to check the hit ratio, and the config and API-key resolution. Use when working on or operating opencode-go-proxy, or when the Codex app is pointed at 127.0.0.1:8787.
+description: Orientation for using the opencode-go-proxy bridge, which lets the Codex app and Claude Code use the OpenCode Go subscription (38 certified coding models) through a local Python service with one runtime dependency (zstandard). Explains how traffic flows, how to start and stop the proxy (menu bar app or CLI, single port 8787), the operational commands (doctor, smoke-test, support-bundle), how prefix caching works and how to check the hit ratio, and the config and API-key resolution. Use when working on or operating opencode-go-proxy, or when Codex or Claude Code is pointed at 127.0.0.1:8787.
 ---
 
 # OpenCode Go Proxy
 
-The proxy bridges Codex's Responses API to OpenCode Go's Chat Completions API in one local process on port 8787. It has one runtime dependency (zstandard); the rest is stdlib. It is single-provider and single-port.
+The proxy bridges Codex's Responses API and Claude Code's Anthropic Messages API to OpenCode Go's per-model wire protocols (Chat Completions, Responses, Anthropic Messages) in one local process on port 8787. It has one runtime dependency (zstandard); the rest is stdlib. It is single-provider and single-port.
 
 ```text
-Codex app -> POST /v1/responses -> opencode-go-proxy (127.0.0.1:8787) -> POST /v1/chat/completions -> OpenCode Go
+Codex app     -> POST /v1/responses  ─┐
+Claude Code   -> POST /v1/messages   ─┤-> opencode-go-proxy (127.0.0.1:8787)
+                                       └-> POST per family -> OpenCode Go
 ```
 
 ## Start and stop
@@ -29,6 +31,10 @@ Codex app -> POST /v1/responses -> opencode-go-proxy (127.0.0.1:8787) -> POST /v
 ## Models: native and opencode-go
 
 The merged model catalog lists both kinds. Models like `gpt-*` and `o*` are native: the proxy passes those requests straight through to the ChatGPT backend (your Codex login), never aliasing them to an OpenCode Go model. `opencode-go/*` models route through the proxy to OpenCode Go. An unknown slug falls back to the default opencode-go model.
+
+## Claude Code
+
+Point Claude Code at the proxy with `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`, any `ANTHROPIC_AUTH_TOKEN` (loopback is unauthenticated), and `ANTHROPIC_MODEL=opencode-go/<slug>`. Every certified Go model works: Messages-family models relay verbatim; Chat/Responses families translate the Anthropic request to a Responses payload and the reply back to Anthropic blocks/SSE. Input `thinking` blocks are dropped; thinking output (e.g. GLM reasoning) streams as real `thinking` blocks; `count_tokens` is a documented byte-based estimate. On a LAN, set `ANTHROPIC_AUTH_TOKEN` on the laptop to the proxy's `OPENCODE_GO_PROXY_CALLER_TOKEN` (the `x-api-key` transport).
 
 ## Threads and automations
 

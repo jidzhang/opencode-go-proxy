@@ -372,6 +372,29 @@ class TestRemoteClientBoundary:
         ):
             check_client("192.0.2.10", {"authorization": f"Bearer {self.TOKEN}"})
 
+    def test_remote_client_accepts_xapi_key_caller_token(self):
+        # Claude Code authenticates Messages requests with x-api-key and
+        # cannot send the custom caller-token header.
+        from opencode_go_proxy.guards import caller_xapi_key_matches
+
+        with mock.patch.dict(
+            os.environ,
+            {REMOTE_ENV: "1", CALLER_TOKEN_ENV: self.TOKEN},
+            clear=True,
+        ):
+            check_client("192.0.2.10", {"x-api-key": self.TOKEN})
+            assert caller_xapi_key_matches({"x-api-key": self.TOKEN})
+
+    def test_remote_client_rejects_wrong_xapi_key(self):
+        with mock.patch.dict(
+            os.environ,
+            {REMOTE_ENV: "1", CALLER_TOKEN_ENV: self.TOKEN},
+            clear=True,
+        ), pytest.raises(ProxyError) as raised:
+            check_client("192.0.2.10", {"x-api-key": "wrong-value"})
+        assert raised.value.status == 401
+        assert raised.value.error_type == "invalid_caller_token"
+
     def test_remote_client_rejects_bare_token_without_scheme(self):
         with mock.patch.dict(
             os.environ,

@@ -381,14 +381,28 @@ class TestMessagesEndpoint:
         resp, raw = post(port, "/v1/messages", b'{"model":"claude-sonnet-4"}')
 
         assert resp.status == 400
-        assert json.loads(raw)["error"]["type"] == "model_not_found"
+        # The /v1/messages surface speaks the Anthropic error taxonomy.
+        assert json.loads(raw)["error"]["type"] == "not_found_error"
 
-    def test_chat_model_on_messages_alias_returns_400(self, server):
+    def test_chat_model_on_messages_alias_translates(self, server):
+        # Since the Claude Code surface, a chat-family model on /messages is
+        # translated (Anthropic request in, Anthropic message out), not 400'd.
         port, _ = server
-        resp, raw = post(port, "/messages", b"{}")
+        upstream_body = json.dumps({
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        }).encode()
 
-        assert resp.status == 400
-        assert json.loads(raw)["error"]["type"] == "invalid_request_error"
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
+             mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(upstream_body)):
+            resp, raw = post(port, "/messages", b"{}")
+
+        assert resp.status == 200
+        message = json.loads(raw)
+        assert message["type"] == "message"
+        assert message["content"][0]["text"] == "hi"
 
     @pytest.mark.parametrize("stream", [False, True])
     def test_upstream_500_maps_to_502_and_keeps_body(self, server, stream):

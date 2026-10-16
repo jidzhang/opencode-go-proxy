@@ -26,6 +26,9 @@ DOCUMENTED_RESPONSES_MODELS: Final = frozenset(
 
 DOCUMENTED_CHAT_MODELS: Final = frozenset(
     {
+        "cat-jam-free",
+        "omen-alpha",
+        "step-5-preview",
         "glm-5.3-flash",
         "glm-5.3",
         "glm-5.2",

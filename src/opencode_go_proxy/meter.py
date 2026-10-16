@@ -49,6 +49,9 @@ PROVIDER = "opencode-go"
 # substitution off entirely.
 ESTIMATE_ZERO_INPUT_ENV = "OPENCODE_GO_PROXY_ESTIMATE_ZERO_INPUT"
 DEFAULT_ESTIMATE_CONTEXT_WINDOW = 272000
+# Bytes-per-token heuristic behind both estimate_input_tokens here and the
+# /v1/messages/count_tokens estimate; one constant so the two cannot drift.
+BYTES_PER_TOKEN_ESTIMATE = 3.3
 
 _lock = threading.Lock()
 
@@ -120,7 +123,7 @@ def estimate_input_tokens(
     if not (isinstance(reported, int) and reported == 0):
         return None
     cap = context_window if isinstance(context_window, int) and context_window > 0 else DEFAULT_ESTIMATE_CONTEXT_WINDOW
-    estimate = max(1000, math.ceil(max(0, prompt_bytes) / 3.3))
+    estimate = max(1000, math.ceil(max(0, prompt_bytes) / BYTES_PER_TOKEN_ESTIMATE))
     return min(cap, estimate)
 
 

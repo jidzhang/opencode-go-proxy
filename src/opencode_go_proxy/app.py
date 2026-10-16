@@ -25,12 +25,17 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
+from .anthropic_client import (
+    COUNT_TOKENS_PATHS,
+    anthropic_error_payload,
+    count_messages_tokens,
+    handle_anthropic_messages_request,
+)
 from .compaction import COMPACT_PATHS, handle_compaction, has_compaction_trigger
 from .config import ProxyConfig, resolve_chat_base_url
 from .errors import ProxyError
 from .go_upstream import (
     handle_go_chat_request,
-    handle_go_messages_request,
     handle_go_responses_request,
 )
 from .guards import (
@@ -77,6 +82,8 @@ Json = dict[str, Any]
 RESPONSES_PATHS = {"/responses", "/v1/responses", "/responses/compact", "/v1/responses/compact"}
 CHAT_COMPLETIONS_PATHS = {"/chat/completions", "/v1/chat/completions"}
 MESSAGES_PATHS = {"/messages", "/v1/messages"}
+_KNOWN_POST_PATHS = RESPONSES_PATHS | CHAT_COMPLETIONS_PATHS | MESSAGES_PATHS | COUNT_TOKENS_PATHS
+_ANTHROPIC_SURFACE_PATHS = MESSAGES_PATHS | COUNT_TOKENS_PATHS
 class ProxyHTTPServer(ThreadingHTTPServer):
     """HTTP server that does not perform reverse DNS during bind."""
 
@@ -209,16 +216,18 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
     def _error_payload(exc: ProxyError) -> Json:
         return {"error": {"type": exc.error_type or "proxy_error", "message": exc.message}}
 
-    def _send_proxy_error(self, exc: ProxyError) -> None:
+    def _send_proxy_error(self, exc: ProxyError, *, payload: Json | None = None) -> None:
         """Write the proxy error envelope, forwarding upstream retry-after.
 
         Only the upstream's retry-after header is copied (lowercase key); the
-        rest of the upstream response stays out of the envelope.
+        rest of the upstream response stays out of the envelope. ``payload``
+        replaces the default envelope body (the /v1/messages surface speaks
+        the Anthropic error shape).
         """
         headers = None
         if exc.headers and exc.headers.get("retry-after"):
             headers = {"retry-after": exc.headers["retry-after"]}
-        self._send_json(self._error_payload(exc), status=exc.status, headers=headers)
+        self._send_json(payload or self._error_payload(exc), status=exc.status, headers=headers)
 
     @staticmethod
     def _request_model(payload: Json) -> str:
@@ -316,16 +325,22 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         # string must not turn a known path into a 404. The payload translates
         # through the normal path either way (compact is just a hint).
         path = self.path.split("?", 1)[0]
+        # The /v1/messages surface speaks the Anthropic error taxonomy, so its
+        # ProxyError failures render in that shape instead of proxy_error.
+        anthropic_surface = path in _ANTHROPIC_SURFACE_PATHS
 
         try:
             self._guard_request()
-            if path not in RESPONSES_PATHS | CHAT_COMPLETIONS_PATHS | MESSAGES_PATHS:
+            if path not in _KNOWN_POST_PATHS:
                 self._send_json({"error": {"message": "not found"}}, status=HTTPStatus.NOT_FOUND)
                 return
             check_content_type(self.headers.get("content-type"))
             config = self._config()
             payload = self._read_json(config)
             _maybe_dump_request(path, request_id, payload)
+            if path in COUNT_TOKENS_PATHS:
+                self._send_json({"input_tokens": count_messages_tokens(payload)})
+                return
             model = self._request_model(payload)
             trace(
                 "request.received",
@@ -347,10 +362,12 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
                 if route_target(model) != "opencode_go":
                     raise ProxyError(
                         HTTPStatus.BAD_REQUEST,
-                        "/messages is available only for opencode-go Messages models",
+                        "/messages is available only for opencode-go models",
                         error_type="invalid_request_error",
                     )
-                handle_go_messages_request(self, payload, config, request_id)
+                # Family dispatch inside: Messages-family models relay
+                # verbatim; Chat/Responses families translate both directions.
+                handle_anthropic_messages_request(self, payload, config, request_id)
             elif path in CHAT_COMPLETIONS_PATHS:
                 handle_chat_completions_request(self, payload, config, request_id)
             elif path in RESPONSES_PATHS and route_target(model) == "native":
@@ -366,15 +383,21 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
                 handle_go_responses_request(self, payload, config, request_id)
         except ProxyError as exc:
             trace("request.failed", request_id=request_id, status=exc.status, message=exc.message)
-            self._send_proxy_error(exc)
+            self._send_proxy_error(
+                exc, payload=anthropic_error_payload(exc) if anthropic_surface else None
+            )
         except BrokenPipeError:
             trace("client.disconnected", request_id=request_id, message="client closed connection during stream")
         except Exception as exc:  # pragma: no cover - defensive crash trace  # noqa: BLE001
             trace("request.crashed", request_id=request_id, message=str(exc), traceback=traceback.format_exc())
+            crash = ProxyError(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "proxy crashed; see stderr trace",
+                error_type="proxy_crash",
+            )
             try:
-                self._send_json(
-                    {"error": {"message": "proxy crashed; see stderr trace", "type": "proxy_crash"}},
-                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                self._send_proxy_error(
+                    crash, payload=anthropic_error_payload(crash) if anthropic_surface else None
                 )
             except BrokenPipeError:
                 pass

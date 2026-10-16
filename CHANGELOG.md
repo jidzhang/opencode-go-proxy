@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- Claude Code support: `POST /v1/messages` now serves every certified Go
+  model, not only the nine Anthropic Messages models. Messages-family models
+  keep the byte-verbatim relay; Chat- and Responses-family models translate
+  through a Responses payload (`src/opencode_go_proxy/anthropic_client.py`),
+  reusing the existing retry, metering, prefix caching, and image-captioning
+  machinery, and stream back as real Anthropic SSE (`message_start` /
+  `content_block_*` / `message_delta` / `message_stop`). Errors on the
+  surface use the Anthropic error envelope; `POST /v1/messages/count_tokens`
+  answers a documented byte-based estimate. Input `thinking` blocks are
+  dropped (Go models cannot replay Anthropic-signed thinking) while thinking
+  output — e.g. GLM reasoning — streams as real `thinking` blocks;
+  `stop_sequences` and `cache_control` are not forwarded.
+- Three new certified Chat Completions models verified against the live
+  gateway: `omen-alpha`, `step-5-preview`, `cat-jam-free` (35 → 38 certified
+  IDs). `gemini-4-argon-contributor` is documented upstream but is not served
+  through the Go gateway endpoints the proxy uses, so it is not integrated.
+- Remote-access caller token now also accepted via `x-api-key` (Claude Code
+  sends its credentials that way and cannot send custom headers), alongside
+  the existing `X-OpenCode-Go-Proxy-Token` header and zcode's Bearer
+  fallback. The native relay strips a caller-token `x-api-key` before
+  forwarding, mirroring the Bearer strip.
+
 ### Fixed
 
 - Map every network exception reachable from `urlopen` (notably
