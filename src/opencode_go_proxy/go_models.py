@@ -12,6 +12,7 @@ from typing import Final
 OPENAI_RESPONSES: Final = "openai_responses"
 OPENAI_CHAT: Final = "openai_chat"
 ANTHROPIC_MESSAGES: Final = "anthropic_messages"
+GOOGLE_GEMINI: Final = "google_gemini"
 
 DOCUMENTED_RESPONSES_MODELS: Final = frozenset(
     {
@@ -81,11 +82,22 @@ VERIFIED_LEGACY_FAMILIES: Final = {
     "qwen3.5-plus": OPENAI_CHAT,
 }
 
+# Live-verified outside the /models endpoint: the opencode CLI lists
+# gemini-4-argon-contributor under Go, and the Go google-native endpoint
+# (/inference/go/google/v1beta/models/<id>:generateContent, Bearer auth)
+# answers for it while /chat/completions, /responses, and /messages all
+# return ModelProtocolUnsupported. Kept out of DOCUMENTED_* (it is absent
+# from the public documentation table and the live /models listing).
+VERIFIED_GOOGLE_FAMILIES: Final = {
+    "gemini-4-argon-contributor": GOOGLE_GEMINI,
+}
+
 GO_MODEL_FAMILIES: Final = {
     **{model: OPENAI_RESPONSES for model in DOCUMENTED_RESPONSES_MODELS},
     **{model: OPENAI_CHAT for model in DOCUMENTED_CHAT_MODELS},
     **{model: ANTHROPIC_MESSAGES for model in DOCUMENTED_MESSAGES_MODELS},
     **VERIFIED_LEGACY_FAMILIES,
+    **VERIFIED_GOOGLE_FAMILIES,
 }
 
 

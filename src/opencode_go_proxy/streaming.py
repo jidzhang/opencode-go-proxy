@@ -197,8 +197,15 @@ def _open_upstream_stream(
             record_quota_from_headers(getattr(response, "headers", None))
             return response, attempts
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            trace("upstream.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body))
+            raw = exc.read()
+            body = raw.decode("utf-8", errors="replace")
+            trace(
+                "upstream.error",
+                request_id=request_id,
+                status=exc.code,
+                body=_mask_trace_body(body),
+                body_len=len(raw),
+            )
             if retriable_http_failure(exc.code, body) and attempts < max_retries:
                 attempts += 1
                 trace("upstream.retry", request_id=request_id, attempt=attempts, status=exc.code)

@@ -18,16 +18,39 @@
   `stop_sequences` and `cache_control` are not forwarded.
 - Three new certified Chat Completions models verified against the live
   gateway: `omen-alpha`, `step-5-preview`, `cat-jam-free` (35 → 38 certified
-  IDs). `gemini-4-argon-contributor` is documented upstream but is not served
-  through the Go gateway endpoints the proxy uses, so it is not integrated.
+  IDs).
+- Fourth Go wire protocol: `gemini-4-argon-contributor` is served only
+  through Go's Google-native endpoint
+  (`/inference/go/google/v1beta/models/<id>:generateContent`, Bearer auth);
+  `/chat/completions`, `/responses`, and `/messages` all return
+  `ModelProtocolUnsupported` for it. The proxy reuses the Zen Google
+  translation (`responses_payload_to_gemini_payload`, `_gemini_to_response`,
+  gemini stream chunks) against the Go google base URL, so the model works
+  on `/v1/responses` and `/v1/messages` (streaming and non-streaming). It is
+  absent from the live `/models` listing, so a `user-models.json` overlay
+  entry is required for it to appear in `/v1/models`.
 - Remote-access caller token now also accepted via `x-api-key` (Claude Code
   sends its credentials that way and cannot send custom headers), alongside
   the existing `X-OpenCode-Go-Proxy-Token` header and zcode's Bearer
   fallback. The native relay strips a caller-token `x-api-key` before
   forwarding, mirroring the Bearer strip.
+- Transparent empty-stream retry for Responses-family models on the Claude
+  Code surface: `POST /v1/messages` with `stream: true` now buffers attempts
+  1-2 and retries empty or reasoning-only streams (up to three attempts,
+  same `OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS` backoff as `/v1/responses`)
+  instead of handing Claude Code an empty reply. Upstream terminal errors
+  are still delivered immediately, never retried.
 
 ### Fixed
 
+- Gemini payloads whose conversation ends on anything other than a plain
+  user text turn — a model turn, a bare `functionResponse` (every post-tool
+  request from Claude Code), or a `functionResponse` merged with text — are
+  rejected by the Go Google gateway with an empty-body 400. The builder now
+  appends a separate trailing `{"role": "user", "parts": [{"text":
+  "Continue."}]}` content for those shapes only; tails that already end in
+  user text are untouched. Size was never the trigger, which is why only
+  tool-using dialogs failed.
 - Map every network exception reachable from `urlopen` (notably
   `ssl.SSLError` and bare `http.client` failures) into the standard
   retry-then-502/504 path: 50 `SSLV3_ALERT_BAD_RECORD_MAC` and 24

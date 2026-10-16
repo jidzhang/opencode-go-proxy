@@ -150,6 +150,15 @@ avoids ambiguity when a Go model and a native model have the same ID.
 | Responses `/responses` | `grok-4.7`, `grok-4.6`, `gpt-6-luna`, `gpt-5.6-luna`, `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor` |
 | Chat Completions `/chat/completions` | `glm-5.3-flash`, `glm-5.3`, `glm-5.2`, `glm-5.1`, `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`, `longcat-2.0`, `longcat-2.5-preview-free`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.5`, `mimo-v2.5-pro`, `hy4-preview`, `hy3`, `space-bunny`, `omen-alpha`, `step-5-preview`, `cat-jam-free` |
 | Anthropic Messages `/messages` | `claude-haiku-5-5`, `minimax-m3`, `minimax-m2.7`, `minimax-m2.5`, `qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-plus` |
+| Google Generative Language `:generateContent` | `gemini-4-argon-contributor` |
+
+`gemini-4-argon-contributor` is served only through Go's Google-native
+endpoint (`/inference/go/google/v1beta/models/<id>:generateContent`, Bearer
+auth) — the gateway returns `ModelProtocolUnsupported` for it on
+`/chat/completions`, `/responses`, and `/messages` — so the proxy routes it
+there with the Zen Google translation and Bearer auth. It is absent from both
+the documentation table and the live `/models` listing, and needs a
+`user-models.json` overlay entry to appear in `/v1/models`.
 
 Of the 38 certified IDs, 31 appear in OpenCode Go's current documentation
 table. The other seven (`glm-5.1`, `omen-alpha`, `deepseek-v4-flash`,
@@ -174,9 +183,9 @@ the `/v1` prefix:
 
 | Client request | Supported Go models | Upstream behavior |
 |----------------|---------------------|-------------------|
-| `POST /v1/responses` | all 38 certified models | translated to each model's certified Responses, Chat Completions, or Messages family |
+| `POST /v1/responses` | all 38 certified models + `gemini-4-argon-contributor` (needs `user-models.json` entry) | translated to each model's certified Responses, Chat Completions, Messages, or Google family |
 | `POST /v1/chat/completions` | the 23 Chat Completions models | relayed in Chat Completions format |
-| `POST /v1/messages` | all 38 certified models (Claude Code surface) | the 9 Messages models relayed verbatim; the other 29 translated Anthropic → each model's certified family and back |
+| `POST /v1/messages` | all 38 certified models + `gemini-4-argon-contributor` (Claude Code surface) | the 9 Messages models relayed verbatim; the rest translated Anthropic → each model's certified family and back |
 
 Streaming and non-streaming requests are supported on every row. The Responses
 aliases `/responses/compact` and `/v1/responses/compact` are also available for

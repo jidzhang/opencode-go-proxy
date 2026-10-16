@@ -179,8 +179,15 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
                     raise ProxyError(HTTPStatus.BAD_GATEWAY, "upstream returned non-object JSON")
                 return value, retries
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            trace("upstream.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body))
+            raw = exc.read()
+            body = raw.decode("utf-8", errors="replace")
+            trace(
+                "upstream.error",
+                request_id=request_id,
+                status=exc.code,
+                body=_mask_trace_body(body),
+                body_len=len(raw),
+            )
             if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
                 trace("upstream.retry", request_id=request_id, attempt=retries, status=exc.code)

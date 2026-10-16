@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from collections.abc import Mapping
 from http import HTTPStatus
-from typing import Any
+from typing import Any, Final
 
 from .config import ProxyConfig
 from .errors import ProxyError
@@ -87,6 +87,12 @@ Json = dict[str, Any]
 
 ZEN_BASE_URL_DEFAULT = "https://opencode.ai/zen/v1"
 ZEN_BASE_URL_ENV = "OPENCODE_ZEN_BASE_URL"
+# Go serves Google-family models (gemini-*) through its own Generative
+# Language endpoint, not the chat/responses/messages gateway. Verified live:
+# Bearer + x-opencode-session authenticates; the :generateContent /
+# :streamGenerateContent shapes are the standard Gemini ones.
+GO_GOOGLE_BASE_URL_DEFAULT = "https://opencode.ai/inference/go/google/v1beta"
+GO_GOOGLE_BASE_URL_ENV = "OPENCODE_GO_GOOGLE_BASE_URL"
 ZEN_PROVIDER = "zen"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_ANTHROPIC_MAX_TOKENS = 8192
@@ -105,6 +111,11 @@ REASONING_DELTA_KEYS = ("reasoning_content",)
 def zen_base_url() -> str:
     """Zen upstream base: env override, then the opencode.ai default."""
     return (os.environ.get(ZEN_BASE_URL_ENV) or ZEN_BASE_URL_DEFAULT).rstrip("/")
+
+
+def go_google_base_url() -> str:
+    """Google-native Go upstream base: env override, then the default."""
+    return (os.environ.get(GO_GOOGLE_BASE_URL_ENV) or GO_GOOGLE_BASE_URL_DEFAULT).rstrip("/")
 
 
 def bare_zen_id(slug: str) -> str:
@@ -169,8 +180,14 @@ def _family_headers(
     *,
     stream: bool,
     extra_headers: Mapping[str, str] | None = None,
+    google_auth: str = "key",
 ) -> dict[str, str]:
-    """Per-family auth, identity, affinity, and accept headers."""
+    """Per-family auth, identity, affinity, and accept headers.
+
+    ``google_auth="bearer"`` sends the google family with an Authorization
+    Bearer header (the Go google endpoint); the default ``"key"`` keeps the
+    ``x-goog-api-key`` header (Zen).
+    """
     accept = "text/event-stream" if stream else "application/json"
     headers = {
         "content-type": "application/json",
@@ -182,7 +199,10 @@ def _family_headers(
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = ANTHROPIC_VERSION
     elif family == "google_gemini":
-        headers["x-goog-api-key"] = api_key
+        if google_auth == "bearer":
+            headers["authorization"] = f"Bearer {api_key}"
+        else:
+            headers["x-goog-api-key"] = api_key
     else:
         headers["authorization"] = f"Bearer {api_key}"
     return headers
@@ -233,6 +253,7 @@ def _build_family_request(
     caption_images: bool = False,
     config: ProxyConfig | None = None,
     request_id: str | None = None,
+    google_auth: str = "key",
 ) -> tuple[str, Json, dict[str, str]]:
     """Return ``(url, body, headers)`` for one family-aware upstream call.
 
@@ -310,9 +331,12 @@ def _build_family_request(
     working = inject_session_model(dict(payload), session_model)
     body = responses_payload_to_gemini_payload(working)
     url = _family_endpoint(base_url, family, bare_id, stream=stream)
-    return url, body, _family_headers(
-        family, api_key, stream=stream, extra_headers=extra_headers
+    headers = _family_headers(
+        family, api_key, stream=stream, extra_headers=extra_headers, google_auth=google_auth
     )
+    if request_id is not None:
+        trace("request.gemini_payload_debug", request_id=request_id, **gemini_payload_debug(body))
+    return url, body, headers
 
 
 def _build_zen_request(
@@ -372,8 +396,15 @@ def _zen_post(
                     raise ProxyError(HTTPStatus.BAD_GATEWAY, f"{provider} upstream returned non-object JSON", retries=retries)
                 return value, retries
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            trace(f"{provider}.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body))
+            raw = exc.read()
+            body = raw.decode("utf-8", errors="replace")
+            trace(
+                f"{provider}.error",
+                request_id=request_id,
+                status=exc.code,
+                body=_mask_trace_body(body),
+                body_len=len(raw),
+            )
             if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
                 trace(f"{provider}.retry", request_id=request_id, attempt=retries, status=exc.code)
@@ -690,6 +721,94 @@ def _anthropic_tool_choice(choice: Any) -> Json | None:
     return None
 
 
+# Schema fields the Gemini function-declaration API accepts. Everything
+# else Claude/Codex tool schemas may carry ($schema, const, one_of,
+# additionalProperties, default, examples, pattern, ...) makes
+# generateContent answer 400 ``Unknown name ... Cannot find field``.
+_GEMINI_SCHEMA_ALLOWLIST: Final = frozenset(
+    {
+        "type",
+        "format",
+        "title",
+        "description",
+        "nullable",
+        "enum",
+        "items",
+        "properties",
+        "required",
+        "propertyOrdering",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+    }
+)
+
+
+def _sanitize_gemini_schema(node: Any) -> Any:
+    """Restrict tool parameter schemas to fields the Gemini API accepts.
+
+    A scalar ``const`` becomes the equivalent single-value ``enum`` so the
+    constraint survives; everything outside the allowlist is dropped. Looser
+    schemas still produce valid function calls, while one rejected keyword
+    fails the whole turn with a 400.
+    """
+    if isinstance(node, dict):
+        const_value = node.get("const")
+        cleaned: Json = {}
+        for key, value in node.items():
+            if not isinstance(key, str) or key not in _GEMINI_SCHEMA_ALLOWLIST:
+                continue
+            if key == "properties" and isinstance(value, dict):
+                cleaned[key] = {
+                    name: _sanitize_gemini_schema(sub)
+                    for name, sub in value.items()
+                    if isinstance(name, str)
+                }
+            else:
+                cleaned[key] = _sanitize_gemini_schema(value)
+        if (
+            "enum" not in cleaned
+            and not isinstance(const_value, (dict, list))
+            and const_value is not None
+        ):
+            cleaned["enum"] = [const_value]
+        return cleaned
+    if isinstance(node, list):
+        return [_sanitize_gemini_schema(item) for item in node]
+    return node
+
+
+_GEMINI_TAIL_TEXT = "Continue."
+
+
+def _is_plain_text_tail(content: Json | None) -> bool:
+    """True for a user turn whose parts are all text, at least one non-empty."""
+    if not isinstance(content, dict) or content.get("role") != "user":
+        return False
+    parts = content.get("parts") or []
+    return bool(parts) and all(
+        isinstance(part, dict) and isinstance(part.get("text"), str)
+        for part in parts
+    ) and any(part["text"] for part in parts)
+
+
+def _ensure_gemini_user_text_tail(contents: list[Json]) -> None:
+    """Make the conversation end with a plain user text turn.
+
+    The Go Google gateway rejects with an empty-body 400 any request whose
+    final content is a model turn, or a user turn that is not pure text --
+    including a functionResponse tail and a content merging functionResponse
+    with text. Appending a separate trailing user text content turns every
+    rejected shape into an accepted one; it must stay a separate content,
+    because the merged functionResponse+text tail is itself rejected. Shapes
+    that already end in user text are left untouched.
+    """
+    if _is_plain_text_tail(contents[-1] if contents else None):
+        return
+    contents.append({"role": "user", "parts": [{"text": _GEMINI_TAIL_TEXT}]})
+
+
 def responses_payload_to_gemini_payload(payload: Json) -> Json:
     """Translate a Responses payload to the Gemini generateContent shape.
 
@@ -697,7 +816,9 @@ def responses_payload_to_gemini_payload(payload: Json) -> Json:
     functionResponse parts, assistant tool calls -> functionCall parts);
     instructions and system messages become systemInstruction; tools become
     functionDeclarations. Consecutive same-role contents are merged, since
-    Gemini rejects non-alternating roles.
+    Gemini rejects non-alternating roles. A trailing user text turn is
+    appended when the conversation would otherwise end in a shape the Go
+    Google gateway rejects with an empty-body 400.
     """
     messages, _stats = responses_input_to_chat_messages(payload)
     tools, _tool_stats = responses_tools_to_chat_tools(payload.get("tools"))
@@ -766,6 +887,8 @@ def responses_payload_to_gemini_payload(payload: Json) -> Json:
             parts.append({"functionCall": {"name": name, "args": arguments}})
         append_content(gemini_role, parts)
 
+    _ensure_gemini_user_text_tail(contents)
+
     body: Json = {"contents": contents}
     if system_texts:
         body["systemInstruction"] = {"parts": [{"text": text} for text in system_texts]}
@@ -774,7 +897,9 @@ def responses_payload_to_gemini_payload(payload: Json) -> Json:
             {
                 "name": tool["function"]["name"],
                 "description": tool["function"].get("description", ""),
-                "parameters": tool["function"].get("parameters") or {"type": "object", "properties": {}},
+                "parameters": _sanitize_gemini_schema(
+                    tool["function"].get("parameters") or {"type": "object", "properties": {}}
+                ),
             }
             for tool in tools
             if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
@@ -794,6 +919,69 @@ def responses_payload_to_gemini_payload(payload: Json) -> Json:
     if generation_config:
         body["generationConfig"] = generation_config
     return body
+
+
+def gemini_payload_debug(body: Json) -> Json:
+    """Compact shape summary of a built Gemini request body for diagnosis.
+
+    Records the contents role sequence, per-content part kinds, the
+    functionDeclaration names, and every functionCall/functionResponse name
+    on the wire — the fields a strict gateway rejects when a name is unknown
+    or a call/response pair is unpaired. Argument and response values are
+    never included (they can carry user content).
+    """
+    shape: Json = {
+        "contents": [],
+        "declarations": [],
+        "function_calls": [],
+        "function_responses": [],
+    }
+    contents = body.get("contents")
+    if isinstance(contents, list):
+        for content in contents:
+            if not isinstance(content, dict):
+                continue
+            kinds: list[str] = []
+            for part in content.get("parts") or []:
+                if not isinstance(part, dict):
+                    continue
+                if "text" in part:
+                    kinds.append("text")
+                    continue
+                call = part.get("functionCall")
+                if isinstance(call, dict):
+                    name = call.get("name")
+                    kinds.append(f"functionCall:{name}")
+                    shape["function_calls"].append(name)
+                    continue
+                response = part.get("functionResponse")
+                if isinstance(response, dict):
+                    name = response.get("name")
+                    kinds.append(f"functionResponse:{name}")
+                    shape["function_responses"].append(name)
+                    continue
+                if "inlineData" in part:
+                    kinds.append("inlineData")
+                else:
+                    kinds.append("unknown")
+            shape["contents"].append({"role": content.get("role"), "parts": kinds})
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for entry in tools:
+            declarations = entry.get("functionDeclarations") if isinstance(entry, dict) else None
+            if isinstance(declarations, list):
+                for declaration in declarations:
+                    if isinstance(declaration, dict) and isinstance(declaration.get("name"), str):
+                        shape["declarations"].append(declaration["name"])
+    tool_config = body.get("toolConfig")
+    if isinstance(tool_config, dict):
+        calling = tool_config.get("functionCallingConfig")
+        if isinstance(calling, dict):
+            shape["tool_config"] = {
+                "mode": calling.get("mode"),
+                "allowedFunctionNames": calling.get("allowedFunctionNames"),
+            }
+    return shape
 
 
 def _tool_result_value(content: Any) -> Any:
@@ -1069,6 +1257,7 @@ def call_family_responses(
     function_tools_only: bool = False,
     restore_namespaces: bool = False,
     caption_images: bool = False,
+    google_auth: str = "key",
 ) -> Json:
     """Non-stream Responses call through one certified protocol family."""
     started = time.time()
@@ -1085,6 +1274,7 @@ def call_family_responses(
         caption_images=caption_images,
         config=config,
         request_id=request_id,
+        google_auth=google_auth,
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     trace(f"{provider}.start", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=False)
@@ -1988,6 +2178,7 @@ def handle_family_responses_request(
     function_tools_only: bool = False,
     restore_namespaces: bool = False,
     caption_images: bool = False,
+    google_auth: str = "key",
 ) -> None:
     """Serve a Responses request through one certified upstream family."""
     started = time.time()
@@ -2032,6 +2223,7 @@ def handle_family_responses_request(
                 function_tools_only=function_tools_only,
                 restore_namespaces=restore_namespaces,
                 caption_images=caption_images,
+                google_auth=google_auth,
             )
         except ProxyError as exc:
             status = exc.upstream_status if exc.upstream_status is not None else int(exc.status)
@@ -2066,6 +2258,7 @@ def handle_family_responses_request(
                 function_tools_only=function_tools_only,
                 restore_namespaces=restore_namespaces,
                 caption_images=caption_images,
+                google_auth=google_auth,
             )
         _send_json(handler, result)
         return
@@ -2083,6 +2276,7 @@ def handle_family_responses_request(
         caption_images=caption_images,
         config=config,
         request_id=request_id,
+        google_auth=google_auth,
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
@@ -2128,6 +2322,7 @@ def handle_family_responses_request(
                         caption_images=caption_images,
                         config=config,
                         request_id=request_id,
+                        google_auth=google_auth,
                     )
                     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
                     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
