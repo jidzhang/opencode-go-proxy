@@ -486,9 +486,24 @@ class TestResponsesFamily:
         assert records and records[0]["provider"] == "zen"
         assert records[0]["status"] == 200
 
+    def _empty_stream_error_body(self) -> bytes:
+        """Exact SSE bytes the relay writes when every empty attempt is spent."""
+        event = {
+            "type": "response.error",
+            "error": {
+                "code": "empty_stream",
+                "message": "upstream stream ended without any output (empty after retries)",
+            },
+        }
+        return (
+            b"data: " + json.dumps(event, separators=(",", ":")).encode("utf-8")
+            + b"\n\ndata: [DONE]\n\n"
+        )
+
     def test_verbatim_retry_connect_failure_relays_first_attempt(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # When the retry cannot connect, the client still gets the buffered
-        # first attempt (well-formed empty turn) instead of a bare 200 SSE.
+        # When the retry cannot connect and the buffered attempt carried no
+        # content, the client gets an explicit error terminal instead of a
+        # well-formed empty turn it would treat as a successful no-op.
         _fake_key(monkeypatch)
         empty = [
             b'data: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n',
@@ -514,15 +529,16 @@ class TestResponsesFamily:
             zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
 
         assert len(calls) == 2
-        assert handler.body() == b"".join(empty)
+        assert handler.body() == self._empty_stream_error_body()
         records = _meter_records()
         assert records and records[0]["provider"] == "zen"
         assert records[0]["status"] == 502
 
-    def test_verbatim_double_empty_relays_third(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_verbatim_double_empty_reports_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Two consecutive empty attempts earn a third and final attempt, which
-        # relays live: the client still sees an empty turn, and its own retry
-        # policy still applies on top.
+        # relays live with content tracking: a third empty stream now ends in
+        # an explicit response.error terminal instead of a silent empty
+        # completion clients mistook for a successful no-op turn.
         _fake_key(monkeypatch)
         monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "0,0")
         empty = [
@@ -542,7 +558,12 @@ class TestResponsesFamily:
             zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
 
         assert len(calls) == 3
-        assert handler.body() == b"".join(empty)
+        # The created line was relayed live; the contentless terminal was
+        # replaced by the explicit error event.
+        assert handler.body() == empty[0] + self._empty_stream_error_body()
+        records = _meter_records()
+        assert records and records[0]["provider"] == "zen"
+        assert records[0]["status"] == 502
 
     def test_verbatim_empty_empty_then_full_relays_third(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Empty, empty, then content: the third attempt carries the turn.
@@ -576,9 +597,9 @@ class TestResponsesFamily:
         assert records and records[0]["provider"] == "zen"
         assert records[0]["status"] == 200
 
-    def test_verbatim_third_connect_failure_relays_last_buffered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_verbatim_third_connect_failure_reports_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Attempts 1 and 2 are empty, attempt 3 never connects: the client
-        # still gets the last buffered empty turn instead of a bare 200 SSE.
+        # gets the explicit error terminal, not a replay of the empty turn.
         _fake_key(monkeypatch)
         monkeypatch.setenv("OPENCODE_GO_PROXY_EMPTY_RETRY_WAIT_MS", "0,0")
         empty = [
@@ -605,7 +626,7 @@ class TestResponsesFamily:
             zen_upstream.handle_zen_responses_request(handler, zen_payload(model="zen/gpt-5.6"), make_config(), "req")
 
         assert len(calls) == 3
-        assert handler.body() == b"".join(empty)
+        assert handler.body() == self._empty_stream_error_body()
         records = _meter_records()
         assert records and records[0]["provider"] == "zen"
         assert records[0]["status"] == 502

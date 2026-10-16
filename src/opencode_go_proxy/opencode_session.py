@@ -45,6 +45,11 @@ def _metadata_id(value: Any) -> str | None:
 
 def _conversation_anchor(payload: dict[str, Any]) -> str:
     input_value = payload.get("input")
+    if input_value is None:
+        # Chat-completions sub-calls (image captioning) carry "messages"
+        # instead of the Responses "input" list; anchor on the same first
+        # items so the derived session id stays stable per conversation.
+        input_value = payload.get("messages")
     if not isinstance(input_value, list):
         input_value = [input_value] if input_value is not None else []
     anchors: list[Any] = []

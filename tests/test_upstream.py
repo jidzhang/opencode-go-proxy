@@ -61,6 +61,51 @@ def _clear_secret_cache() -> None:
     clear_api_key_cache()
 
 
+class TestSessionHeader:
+    """call_upstream_chat must carry the stable x-opencode-session affinity id.
+
+    The Go gateway rejects session-less sub-calls (split-turn image
+    captioning) with MissingSessionID; today every caption burned three
+    upstream round-trips before falling back.
+    """
+
+    @staticmethod
+    def _session_id(req: urllib.request.Request) -> str | None:
+        return {k.lower(): v for k, v in req.headers.items()}.get("x-opencode-session")
+
+    def test_call_upstream_chat_sends_stable_session_header(self) -> None:
+        captured: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            captured.append(req)
+            return ok_response()
+
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            call_upstream_chat(chat_payload(), make_config(), "req")
+            call_upstream_chat(chat_payload(), make_config(), "req")
+
+        assert len(captured) == 2
+        first = self._session_id(captured[0])
+        assert first
+        assert self._session_id(captured[1]) == first
+
+    def test_session_header_varies_with_payload(self) -> None:
+        captured: list[urllib.request.Request] = []
+
+        def fake_urlopen(req, **kw):
+            captured.append(req)
+            return ok_response()
+
+        other = {"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "other"}]}
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
+             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            call_upstream_chat(chat_payload(), make_config(), "req")
+            call_upstream_chat(other, make_config(), "req")
+
+        assert self._session_id(captured[0]) != self._session_id(captured[1])
+
+
 class TestRetryPolicy:
     def test_retries_on_429_then_succeeds(self) -> None:
         calls = []
