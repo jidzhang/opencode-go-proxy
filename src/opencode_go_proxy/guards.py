@@ -85,6 +85,14 @@ def _bearer_token(headers: Any) -> str:
     return auth[7:].strip()
 
 
+def _supplied_matches_caller_token(supplied: str) -> bool:
+    """Timing-safe compare of one supplied credential against the caller token."""
+    expected = os.environ.get(CALLER_TOKEN_ENV, "")
+    if len(expected) < MIN_CALLER_TOKEN_LENGTH:
+        return False
+    return caller_token_matches(supplied, expected)
+
+
 def caller_bearer_matches(headers: Any) -> bool:
     """True when the Authorization Bearer equals the configured caller token.
 
@@ -93,10 +101,18 @@ def caller_bearer_matches(headers: Any) -> bool:
     forwarding, and both must agree on what counts as the caller token or
     the capability leaks upstream.
     """
-    expected = os.environ.get(CALLER_TOKEN_ENV, "")
-    if len(expected) < MIN_CALLER_TOKEN_LENGTH:
-        return False
-    return caller_token_matches(_bearer_token(headers), expected)
+    return _supplied_matches_caller_token(_bearer_token(headers))
+
+
+def caller_xapi_key_matches(headers: Any) -> bool:
+    """True when the x-api-key header equals the configured caller token.
+
+    Claude Code authenticates Messages requests with ``x-api-key`` (the
+    Anthropic API-key convention) and cannot send the custom proxy header;
+    like the zcode Bearer fallback, the value is a proxy access capability
+    only and is never forwarded upstream.
+    """
+    return _supplied_matches_caller_token((headers.get("x-api-key") or "").strip())
 
 
 def check_client(client_host: str, headers) -> None:
@@ -104,7 +120,8 @@ def check_client(client_host: str, headers) -> None:
 
     Primary credential is X-OpenCode-Go-Proxy-Token. As a fallback for
     clients that cannot send custom headers, Authorization Bearer with the
-    caller token is accepted too. Upstream auth never reuses this value.
+    caller token is accepted too, and so is x-api-key (Claude Code sends its
+    credentials that way). Upstream auth never reuses these values.
     """
     if _is_loopback(client_host):
         return
@@ -122,7 +139,11 @@ def check_client(client_host: str, headers) -> None:
             "remote access is not securely configured",
             error_type="remote_auth_not_configured",
         )
-    if caller_token_matches(supplied, expected) or caller_bearer_matches(headers):
+    if (
+        caller_token_matches(supplied, expected)
+        or caller_bearer_matches(headers)
+        or caller_xapi_key_matches(headers)
+    ):
         return
     raise ProxyError(
         HTTPStatus.UNAUTHORIZED,

@@ -1210,6 +1210,36 @@
       "use_responses_lite": false,
       "visibility": "list",
       "web_search_tool_type": "text_and_image"
+    },
+    {
+      "slug": "cat-jam-free",
+      "display_name": "Cat Jam Free",
+      "description": "Cat Jam (free) through the OpenCode Go Chat Completions API.",
+      "context_window": 128000,
+      "max_context_window": 128000,
+      "input_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "omen-alpha",
+      "display_name": "Omen Alpha",
+      "description": "Omen Alpha through the OpenCode Go Chat Completions API.",
+      "context_window": 200000,
+      "max_context_window": 200000,
+      "input_modalities": [
+        "text"
+      ]
+    },
+    {
+      "slug": "step-5-preview",
+      "display_name": "Step 5 Preview",
+      "description": "Step 5 (preview) through the OpenCode Go Chat Completions API.",
+      "context_window": 200000,
+      "max_context_window": 200000,
+      "input_modalities": [
+        "text"
+      ]
     }
   ]
 }

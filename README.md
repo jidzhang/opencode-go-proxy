@@ -7,23 +7,25 @@
 
 Use your own [OpenCode Go](https://opencode.ai/docs/go) and
 [OpenCode Zen](https://opencode.ai/zen) credentials in
-[Codex](https://github.com/openai/codex) through a local protocol adapter.
+[Codex](https://github.com/openai/codex) or [Claude Code](https://code.claude.com)
+through a local protocol adapter.
 
-Codex expects a Responses API (`/v1/responses`). OpenCode Go's documented
-models span Responses, Chat Completions, and Anthropic Messages, while OpenCode
-Zen also includes Gemini-family routes. This proxy selects the documented wire
+Codex expects a Responses API (`/v1/responses`); Claude Code speaks the
+Anthropic Messages protocol (`/v1/messages`). OpenCode Go's documented models
+span Responses, Chat Completions, and Anthropic Messages, while OpenCode Zen
+also includes Gemini-family routes. This proxy selects the documented wire
 protocol for each model in one local process:
 
 ```text
-Codex app
-    │
-    │  POST /v1/responses (Responses API)
-    ▼
-opencode-go-proxy  ←── localhost:8787, one runtime dep (zstandard)
-    │
-    │  POST per family: chat/completions · responses · messages · models/<id>
-    ▼
-OpenCode Go / OpenCode Zen  ── 35 certified Go models · optional Zen models
+Codex app ── POST /v1/responses (Responses API) ──┐
+                                                  │
+Claude Code ── POST /v1/messages (Anthropic) ─────┤
+                                                  ▼
+                                opencode-go-proxy  ←── localhost:8787, one runtime dep (zstandard)
+                                                  │
+                    POST per family: chat/completions · responses · messages · models/<id>
+                                                  ▼
+                        OpenCode Go / OpenCode Zen  ── 38 certified Go models · optional Zen models
 ```
 
 ## Project and policy boundary
@@ -92,23 +94,73 @@ configuration. It preserves unrelated settings, native ChatGPT authorization,
 sessions, and desktop state. Run `opencode-go-proxy config disable` to remove
 only that managed block.
 
+## Claude Code setup
+
+Claude Code speaks the Anthropic Messages protocol; point it at the proxy with
+environment variables (no config-file edit needed):
+
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
+export ANTHROPIC_AUTH_TOKEN="local"        # any value; loopback is not authenticated
+export ANTHROPIC_MODEL="opencode-go/glm-5.2"
+claude
+```
+
+Select any Go model with `claude --model opencode-go/<model-id>` or the
+`ANTHROPIC_MODEL` variable. Over the API the two model lists (`/v1/models`)
+and the routing rules are shared with Codex: `opencode-go/<id>` selects a Go
+model, and unknown IDs are rejected before any upstream request.
+
+How the surface maps to upstreams:
+
+- Messages-family models (`minimax-m3`, `qwen3.8-max`, …) relay byte-verbatim;
+  the upstream's native Anthropic response is passed through unchanged.
+- Chat- and Responses-family models (`glm-*`, `deepseek-*`, `kimi-*`,
+  `grok-*`, …) are translated: the Anthropic request becomes a Responses
+  payload (reusing the same retry, metering, prefix caching, and image
+  captioning as the Codex path), and the reply is translated back to Anthropic
+  content blocks and SSE events (`message_start` → content blocks →
+  `message_stop`). Errors surface in the Anthropic error envelope.
+
+Phase 1 behavior differences, deliberate and safe to ignore in normal agent
+use:
+
+- `thinking` / `redacted_thinking` input blocks are dropped (Go models cannot
+  replay Anthropic-signed thinking). Thinking *output* — e.g. GLM reasoning —
+  is preserved and streams as real `thinking` content blocks.
+- `stop_sequences` are not forwarded; `cache_control` markers are stripped
+  (upstream prompt caching is handled by the proxy itself, see
+  [Prefix caching](#prefix-caching)).
+- `document` blocks are flattened to a `[document omitted: <title>]` text
+  note; images are supported (data URLs and https URLs).
+- A turn truncated at `max_tokens` reports `stop_reason: "end_turn"` rather
+  than `"max_tokens"`: the upstream finish reason is not plumbed through the
+  shared response translator.
+- `count_tokens` returns a byte-based estimate, sufficient for Claude Code's
+  compaction heuristics but not a billing number.
+
 ## Available models
 
 The checked-in catalog supports every model ID documented for OpenCode Go.
-Use the explicit `opencode-go/<model-id>` form in Codex; it avoids ambiguity
-when a Go model and a native OpenAI model have the same ID.
+Use the explicit `opencode-go/<model-id>` form in Codex or Claude Code; it
+avoids ambiguity when a Go model and a native model have the same ID.
 
 | Upstream protocol | Certified model IDs |
 |-------------------|----------------------|
 | Responses `/responses` | `grok-4.7`, `grok-4.6`, `gpt-6-luna`, `gpt-5.6-luna`, `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor` |
-| Chat Completions `/chat/completions` | `glm-5.3-flash`, `glm-5.3`, `glm-5.2`, `glm-5.1`, `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`, `longcat-2.0`, `longcat-2.5-preview-free`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.5`, `mimo-v2.5-pro`, `hy4-preview`, `hy3`, `space-bunny` |
+| Chat Completions `/chat/completions` | `glm-5.3-flash`, `glm-5.3`, `glm-5.2`, `glm-5.1`, `kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`, `longcat-2.0`, `longcat-2.5-preview-free`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `mimo-v2.6-flash`, `mimo-v2.6-pro`, `mimo-v2.5`, `mimo-v2.5-pro`, `hy4-preview`, `hy3`, `space-bunny`, `omen-alpha`, `step-5-preview`, `cat-jam-free` |
 | Anthropic Messages `/messages` | `claude-haiku-5-5`, `minimax-m3`, `minimax-m2.7`, `minimax-m2.5`, `qwen3.8-max`, `qwen3.8-flash`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.6-plus` |
 
-Of the 35 certified IDs, 31 appear in OpenCode Go's current documentation
-table. The other four (`glm-5.1`, `minimax-m2.5`, `qwen3.7-max`,
+Of the 38 certified IDs, 31 appear in OpenCode Go's current documentation
+table. The other seven (`glm-5.1`, `omen-alpha`, `deepseek-v4-flash`,
+`deepseek-v4-flash-vision-exp`, `minimax-m2.5`, `qwen3.7-max`,
 `qwen3.6-plus`) are still served by the live `/models` endpoint, but their
-family assignments come from earlier documentation and have not been
-re-checked against the current table.
+family assignments come from earlier documentation or direct protocol probes
+and have not been re-checked against the current table. The three newest Chat Completions entries (`omen-alpha`,
+`step-5-preview`, `cat-jam-free`) joined the live gateway recently — the first
+two were protocol-verified against it directly, `cat-jam-free` is
+region-limited and taken from the documentation table — and their context
+windows are conservative placeholders.
 
 The live `/models` response can change. Runtime refresh accepts only documented
 or protocol-certified IDs, so an unknown ID is not guessed into the wrong
@@ -122,15 +174,20 @@ the `/v1` prefix:
 
 | Client request | Supported Go models | Upstream behavior |
 |----------------|---------------------|-------------------|
-| `POST /v1/responses` | all 35 certified models | translated to each model's certified Responses, Chat Completions, or Messages family |
-| `POST /v1/chat/completions` | the 20 Chat Completions models | relayed in Chat Completions format |
-| `POST /v1/messages` | the 9 Anthropic Messages models | relayed in Messages format |
+| `POST /v1/responses` | all 38 certified models | translated to each model's certified Responses, Chat Completions, or Messages family |
+| `POST /v1/chat/completions` | the 23 Chat Completions models | relayed in Chat Completions format |
+| `POST /v1/messages` | all 38 certified models (Claude Code surface) | the 9 Messages models relayed verbatim; the other 29 translated Anthropic → each model's certified family and back |
 
 Streaming and non-streaming requests are supported on every row. The Responses
 aliases `/responses/compact` and `/v1/responses/compact` are also available for
 compaction. A model sent to an incompatible direct-format endpoint is rejected
 before any upstream request rather than silently translated to a different
-client response shape.
+client response shape; the one exception is `/v1/messages`, which accepts every
+Go model by design (it is a client surface, not a wire mirror).
+
+`POST /v1/messages/count_tokens` is also served: an answer in the real
+endpoint's shape (`{"input_tokens": N}`) with a byte-based estimate, not a
+tokenizer count.
 
 ### Switching models
 
@@ -264,6 +321,7 @@ See the [lazycodex docs](https://github.com/code-yeongyu/oh-my-openagent) for se
 
 ## Features
 
+- Claude Code support: the `/v1/messages` surface serves every certified Go model — Messages-family models relay verbatim, Chat/Responses families translate both directions (request → Responses payload, reply → Anthropic blocks/SSE) — with the Anthropic error envelope, a `count_tokens` estimate, and `x-api-key` caller-token auth for LAN clients
 - OpenCode Zen support: auto-discovered `zen/<id>` catalog merged with models.dev metadata, per-family wire translation (Anthropic Messages / Gemini / Responses / chat-completions) with per-family auth header mapping, free models, and `provider="zen"` metering
 - Responses `input` to chat `messages` translation
 - `instructions` and `developer` roles mapped to system messages
@@ -555,9 +613,17 @@ export OPENCODE_GO_PROXY_CALLER_TOKEN="$(openssl rand -hex 32)"
 opencode-go-proxy --bind 0.0.0.0
 ```
 
-Every non-loopback client must send the token in
-`X-OpenCode-Go-Proxy-Token`. For a Codex custom provider, pass it from the
-environment rather than writing the value into config:
+Every non-loopback client must present the caller token. Three transports are
+accepted, so each client uses whichever it can send:
+
+| Client | Transport | How to configure |
+|--------|-----------|------------------|
+| Codex | `X-OpenCode-Go-Proxy-Token` header | `env_http_headers` in the custom provider (below) |
+| zcode | `Authorization: Bearer <token>` | set the provider's `apiKey` to the caller token |
+| Claude Code | `x-api-key: <token>` | set `ANTHROPIC_AUTH_TOKEN` (or `ANTHROPIC_API_KEY`) to the caller token |
+
+For a Codex custom provider, pass the token from the environment rather than
+writing the value into config:
 
 ```toml
 [model_providers.opencode-go-remote]
@@ -567,7 +633,17 @@ wire_api = "responses"
 env_http_headers = { "X-OpenCode-Go-Proxy-Token" = "OPENCODE_GO_PROXY_CALLER_TOKEN" }
 ```
 
-Clients that cannot send custom headers (e.g. zcode, whose custom-provider JSON only exposes an apiKey field sent as Authorization Bearer) may send the caller token as Authorization Bearer instead. For a zcode custom provider, set its apiKey to the caller-token value and point baseUrl at the proxy. The proxy never forwards this value upstream: Go/Zen requests rebuild their own credentials from the server-side key, and the native relay strips a caller-token Bearer before forwarding.
+For Claude Code on a laptop, the whole configuration is:
+
+```bash
+export ANTHROPIC_BASE_URL="http://<proxy-host>:8787"
+export ANTHROPIC_AUTH_TOKEN="<caller-token>"
+export ANTHROPIC_MODEL="opencode-go/glm-5.2"
+```
+
+The proxy never forwards the caller token upstream: Go/Zen requests rebuild
+their own credentials from the server-side key, and the native relay strips a
+caller-token Bearer or `x-api-key` before forwarding.
 
 Use TLS and network-level access controls for any remote deployment. The caller
 token is only a proxy access capability; it is never used as or forwarded as a
@@ -734,6 +810,13 @@ starting another.
 **API key not found**
 Set `OPENCODE_GO_API_KEY` env var or add to macOS keychain:
 `security add-generic-password -a "$USER" -s opencode-go-api-key -w`
+
+**A model you disabled in the OpenCode console still shows in the picker**
+Hide it locally instead of waiting for the gateway to reject it: add
+`{"version": 1, "hidden": ["opencode-go/grok-4.7"]}` to `model-picker.json`
+in the state dir (or a `"hide": true` entry in `user-models.json`). A model
+the gateway refuses with its "not supported" envelope is also auto-hidden
+after two failed turns.
 
 **Upstream rate limited (429)**
 OpenCode Go has 5-hour/weekly/monthly usage limits. Switch to a cheaper model (DeepSeek V4 Flash or MiMo V2.5) to stretch your quota. See [usage limits](https://opencode.ai/docs/go#usage-limits).

@@ -223,6 +223,29 @@ def test_caller_token_bearer_is_not_forwarded(native_upstream) -> None:
     assert "authorization" not in captured["headers"]
 
 
+def test_caller_token_xapi_key_is_not_forwarded(native_upstream) -> None:
+    """A Claude Code style remote credential must not leak to the native backend."""
+    from opencode_go_proxy import guards
+
+    token = "d" * 32
+    handler = _FakeHandler(
+        {"x-api-key": token, "content-type": "application/json"}
+    )
+    with mock.patch.dict(
+        os.environ,
+        {
+            passthrough.NATIVE_BASE_URL_ENV: native_upstream,
+            guards.CALLER_TOKEN_ENV: token,
+            guards.REMOTE_ENV: "1",
+        },
+    ):
+        relay_native_request(
+            handler, {"model": "gpt-5.6-luna", "input": "hi"}, make_config(), "req"
+        )
+    captured = _FakeChatGpt.captured[0]
+    assert "x-api-key" not in captured["headers"]
+
+
 def test_native_turn_is_metered(native_upstream) -> None:
     handler = _FakeHandler({"authorization": "Bearer t", "content-type": "application/json"})
     with mock.patch.dict(os.environ, {passthrough.NATIVE_BASE_URL_ENV: native_upstream}):
