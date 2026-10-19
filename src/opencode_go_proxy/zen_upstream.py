@@ -335,7 +335,7 @@ def _build_family_request(
         family, api_key, stream=stream, extra_headers=extra_headers, google_auth=google_auth
     )
     if request_id is not None:
-        trace("request.gemini_payload_debug", request_id=request_id, **gemini_payload_debug(body))
+        trace("request.gemini_payload_debug", level="debug", request_id=request_id, **gemini_payload_debug(body))
     return url, body, headers
 
 
@@ -381,13 +381,13 @@ def _zen_post(
     retries = 0
     while True:
         request = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
-        trace(f"{provider}.start", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
+        trace(f"{provider}.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
         started = time.time()
         try:
             with urllib.request.urlopen(request, timeout=config.timeout_sec) as response:
                 body = response.read()
                 elapsed_ms = int((time.time() - started) * 1000)
-                trace(f"{provider}.done", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
+                trace(f"{provider}.done", level="debug", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
                 try:
                     value = json.loads(body)
                 except json.JSONDecodeError:
@@ -399,7 +399,7 @@ def _zen_post(
             raw = exc.read()
             body = raw.decode("utf-8", errors="replace")
             trace(
-                f"{provider}.error",
+                f"{provider}.error", level="warn",
                 request_id=request_id,
                 status=exc.code,
                 body=_mask_trace_body(body),
@@ -407,7 +407,7 @@ def _zen_post(
             )
             if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
-                trace(f"{provider}.retry", request_id=request_id, attempt=retries, status=exc.code)
+                trace(f"{provider}.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
                 continue
             error_type, message = parse_zen_error(body)
@@ -449,10 +449,10 @@ def _zen_post(
                 body=body,
             ) from exc
         except TimeoutError:
-            trace(f"{provider}.timeout", request_id=request_id, timeout=config.timeout_sec)
+            trace(f"{provider}.timeout", level="warn", request_id=request_id, timeout=config.timeout_sec)
             if retries < max_retries:
                 retries += 1
-                trace(f"{provider}.retry", request_id=request_id, attempt=retries, reason="timeout")
+                trace(f"{provider}.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, f"{provider} upstream timeout", retries=retries) from None
@@ -460,10 +460,10 @@ def _zen_post(
         except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
-            trace(f"{provider}.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
+            trace(f"{provider}.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1
-                trace(f"{provider}.retry", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
+                trace(f"{provider}.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"{provider} upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
@@ -489,20 +489,20 @@ def _zen_post_verbatim(
     retries = 0
     while True:
         request = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
-        trace("zen.start", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
+        trace("zen.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
         started = time.time()
         try:
             with urllib.request.urlopen(request, timeout=config.timeout_sec) as response:
                 body = response.read()
                 elapsed_ms = int((time.time() - started) * 1000)
-                trace("zen.done", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
+                trace("zen.done", level="debug", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
                 return response.status, body, retries, response.headers.get("content-type"), None
         except urllib.error.HTTPError as exc:
             body = exc.read()
-            trace("zen.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
+            trace("zen.error", level="warn", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
             if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
-                trace("zen.retry", request_id=request_id, attempt=retries, status=exc.code)
+                trace("zen.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
                 continue
             normalized = normalize_usage_limit_error(body)
@@ -511,10 +511,10 @@ def _zen_post_verbatim(
             retry_after = exc.headers.get("retry-after") if exc.headers else None
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), retry_after
         except TimeoutError:
-            trace("zen.timeout", request_id=request_id, timeout=config.timeout_sec)
+            trace("zen.timeout", level="warn", request_id=request_id, timeout=config.timeout_sec)
             if retries < max_retries:
                 retries += 1
-                trace("zen.retry", request_id=request_id, attempt=retries, reason="timeout")
+                trace("zen.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "zen upstream timeout", retries=retries) from None
@@ -522,10 +522,10 @@ def _zen_post_verbatim(
         except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
-            trace("zen.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
+            trace("zen.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1
-                trace("zen.retry", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
+                trace("zen.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"zen upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
@@ -1277,7 +1277,7 @@ def call_family_responses(
         google_auth=google_auth,
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    trace(f"{provider}.start", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=False)
+    trace(f"{provider}.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=False)
     try:
         value, retries = _zen_post(
             url, raw_payload, headers, config, request_id, provider=provider
@@ -1324,7 +1324,7 @@ def call_family_responses(
     if restore_namespaces:
         response = restore_namespaced_function_calls(response)
     trace(
-        f"{provider}.done", request_id=request_id, family=family, stream=False,
+        f"{provider}.done", level="debug", request_id=request_id, family=family, stream=False,
         output_items=len(response.get("output", [])),
         output_text_len=len(response.get("output_text", "")),
     )
@@ -1436,7 +1436,7 @@ class _ZenStreamEngine:
         data = b"data: " + json.dumps(event, separators=(",", ":")).encode("utf-8") + b"\n\n"
         if not self._write(data):
             self.client_alive = False
-            trace("client.disconnected", request_id=self.request_id, message="client closed connection during stream")
+            trace("client.disconnected", level="info", request_id=self.request_id, message="client closed connection during stream")
 
     def send_error(self, message: str, *, code: str | None = None) -> None:
         error: Json = {"message": message}
@@ -1726,7 +1726,7 @@ class _ZenStreamEngine:
                         self.handle_chunk(chunk)
         except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
             trace(
-                f"{self.provider}.stream_aborted",
+                f"{self.provider}.stream_aborted", level="warn",
                 request_id=self.request_id,
                 status=exc.code if isinstance(exc, urllib.error.HTTPError) else getattr(exc, "reason", str(exc)),
             )
@@ -1743,7 +1743,7 @@ class _ZenStreamEngine:
 
         if not self.client_alive:
             trace(
-                f"{self.provider}.client_gone",
+                f"{self.provider}.client_gone", level="info",
                 request_id=self.request_id,
                 message="client disconnected before final events",
             )
@@ -1846,7 +1846,7 @@ class _ZenStreamEngine:
             retries=self.retries or None,
         )
         trace(
-            f"{self.provider}.done", request_id=self.request_id, family=self.family, stream=True,
+            f"{self.provider}.done", level="debug", request_id=self.request_id, family=self.family, stream=True,
             output_items=len(output), output_text_len=len(self.text),
         )
 
@@ -2027,7 +2027,7 @@ def _relay_responses_verbatim(
             _meter_provider(model, started, 502, provider=provider, stream_aborted=True, retries=total or None)
 
     def _done(outcome: str, **extra: Any) -> None:
-        trace(f"{provider}.done", request_id=request_id, family=family, stream=True, outcome=outcome, **extra)
+        trace(f"{provider}.done", level="debug", request_id=request_id, family=family, stream=True, outcome=outcome, **extra)
 
     ka = KeepaliveWriter(handler)
     ka.start()
@@ -2074,7 +2074,7 @@ def _relay_responses_verbatim(
                             break
             except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
                 trace(
-                    f"{provider}.stream_aborted",
+                    f"{provider}.stream_aborted", level="warn",
                     request_id=request_id,
                     status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
                 )
@@ -2109,7 +2109,7 @@ def _relay_responses_verbatim(
         for attempt in (2, 3):
             wait_ms = waits[min(attempt - 2, len(waits) - 1)]
             trace(
-                f"{provider}.empty_retry",
+                f"{provider}.empty_retry", level="warn",
                 request_id=request_id,
                 family=family,
                 stream=True,
@@ -2128,7 +2128,7 @@ def _relay_responses_verbatim(
             except _ConnectFailed as fail:
                 exc = fail.exc
                 trace(
-                    f"{provider}.empty_retry_failed",
+                    f"{provider}.empty_retry_failed", level="error",
                     request_id=request_id,
                     attempt=attempt,
                     status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
@@ -2202,7 +2202,7 @@ def handle_family_responses_request(
             payload = dict(payload)
             payload["input"] = cleaned
             trace(
-                "request.dangling_calls_dropped",
+                "request.dangling_calls_dropped", level="warn",
                 request_id=request_id,
                 provider=provider,
                 model=model,
@@ -2213,7 +2213,7 @@ def handle_family_responses_request(
         payload = dict(payload)
         payload["input"] = cleaned_phase
         trace(
-            "request.phase_stripped",
+            "request.phase_stripped", level="debug",
             request_id=request_id,
             provider=provider,
             model=model,
@@ -2249,7 +2249,7 @@ def handle_family_responses_request(
             # metered inside call_family_responses). A second failure
             # propagates as-is: it reflects the detoxed state.
             trace(
-                "request.reasoning_detox",
+                "request.reasoning_detox", level="warn",
                 request_id=request_id,
                 provider=provider,
                 model=model,
@@ -2293,7 +2293,7 @@ def handle_family_responses_request(
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
-    trace(f"{provider}.start", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True)
+    trace(f"{provider}.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True)
     pending_retries = 0
     detoxes = 1
     while True:
@@ -2313,7 +2313,7 @@ def handle_family_responses_request(
                     detoxes = 0
                     pending_retries += fail.attempts or 0
                     trace(
-                        "request.reasoning_detox",
+                        "request.reasoning_detox", level="warn",
                         request_id=request_id,
                         provider=provider,
                         model=model,
@@ -2339,7 +2339,7 @@ def handle_family_responses_request(
                     )
                     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
                     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
-                    trace(f"{provider}.start", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True, detox_retry=True)
+                    trace(f"{provider}.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True, detox_retry=True)
                     continue
             retries = (fail.attempts or 0) + pending_retries
             if isinstance(exc, urllib.error.HTTPError):
@@ -2440,7 +2440,7 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
 
     if payload.get("stream") is True:
         req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
-        trace("zen.start", request_id=request_id, url=url, bytes=len(raw_payload), family="openai_chat", stream=True)
+        trace("zen.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), family="openai_chat", stream=True)
         try:
             response, retries = _open_upstream_stream(req, config, request_id, default_max_retries())
         except _ConnectFailed as fail:
@@ -2469,7 +2469,7 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
             _meter_zen(model, started, 0, stream_aborted=True, retries=retries or None)
         else:
             _meter_zen(model, started, 502, stream_aborted=True, retries=retries or None)
-        trace("zen.done", request_id=request_id, family="openai_chat", stream=True, outcome=outcome)
+        trace("zen.done", level="debug", request_id=request_id, family="openai_chat", stream=True, outcome=outcome)
         return
 
     status, raw, retries, content_type, retry_after = _zen_post_verbatim(

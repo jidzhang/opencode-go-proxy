@@ -278,7 +278,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         try:
             self._guard_request()
         except ProxyError as exc:
-            trace("request.failed", status=exc.status, message=exc.message)
+            trace("request.failed", level="warn", status=exc.status, message=exc.message)
             self._send_proxy_error(exc)
             return
         if self.path in {"/health", "/v1/health"}:
@@ -343,7 +343,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
                 return
             model = self._request_model(payload)
             trace(
-                "request.received",
+                "request.received", level="debug",
                 request_id=request_id,
                 path=self.path,
                 model=model,
@@ -382,14 +382,14 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
             else:
                 handle_go_responses_request(self, payload, config, request_id)
         except ProxyError as exc:
-            trace("request.failed", request_id=request_id, status=exc.status, message=exc.message)
+            trace("request.failed", level="warn", request_id=request_id, status=exc.status, message=exc.message)
             self._send_proxy_error(
                 exc, payload=anthropic_error_payload(exc) if anthropic_surface else None
             )
         except BrokenPipeError:
-            trace("client.disconnected", request_id=request_id, message="client closed connection during stream")
+            trace("client.disconnected", level="info", request_id=request_id, message="client closed connection during stream")
         except Exception as exc:  # pragma: no cover - defensive crash trace  # noqa: BLE001
-            trace("request.crashed", request_id=request_id, message=str(exc), traceback=traceback.format_exc())
+            trace("request.crashed", level="error", request_id=request_id, message=str(exc), traceback=traceback.format_exc())
             crash = ProxyError(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "proxy crashed; see stderr trace",
@@ -514,7 +514,7 @@ def record_go_unsupported(slug: str) -> None:
 
         if _catalog.hide_model_from_picker(slug):
             _auto_hidden.add(slug)
-        trace("catalog.hide_unsupported", slug=slug, strikes=strikes)
+        trace("catalog.hide_unsupported", level="info", slug=slug, strikes=strikes)
 
 
 def clear_go_unsupported(slug: str) -> None:
@@ -551,7 +551,7 @@ def handle_responses_request(payload: Json, config: ProxyConfig, request_id: str
         conversion_stats["upstream_model"] = chat_payload.get("model")
 
     trace(
-        "request.converted",
+        "request.converted", level="debug",
         request_id=request_id,
         stats=conversion_stats,
         upstream_model=chat_payload.get("model"),
@@ -570,7 +570,7 @@ def handle_responses_request(payload: Json, config: ProxyConfig, request_id: str
             # requested model image input but the upstream rejected the payload.
             # Caption the images and retry the same requested model once.
             fell_back = True
-            trace("image_fallback", request_id=request_id, kind="caption", status=status, model=request_model)
+            trace("image_fallback", level="warn", request_id=request_id, kind="caption", status=status, model=request_model)
             chat_payload = caption_images_in_messages(chat_payload, request_model, config, request_id)
             conversion_stats["upstream_model"] = chat_payload.get("model")
             try:
@@ -588,7 +588,7 @@ def handle_responses_request(payload: Json, config: ProxyConfig, request_id: str
                 # the identical original body to the zen path, which
                 # translates per wire family; the zen result/error envelope
                 # becomes the response.
-                trace("fallback.go_reject_zen", request_id=request_id, model=session_model,
+                trace("fallback.go_reject_zen", level="info", request_id=request_id, model=session_model,
                       status=status, path="responses")
                 return call_zen_responses(original_payload, config, request_id)
             elif is_go_not_supported_rejection(session_model, status, exc.body):
@@ -608,7 +608,7 @@ def handle_responses_request(payload: Json, config: ProxyConfig, request_id: str
     estimated = estimate_input_tokens(request_model, prompt_bytes, chat.get("usage"), context_window=context_cap)
     response = chat_completion_to_response(chat, request_model=request_model, estimated_input_tokens=estimated)
     trace(
-        "response.converted",
+        "response.converted", level="debug",
         request_id=request_id,
         output_items=len(response.get("output", [])),
         output_text_len=len(response.get("output_text", "")),
@@ -663,7 +663,7 @@ CATALOG_REFRESH_INTERVAL_HOURS = 6
 
 def _refresh_catalog_once(reason: str) -> None:
     """Run one TTL-gated runtime catalog refresh; failures are logged, never fatal."""
-    trace("catalog.refresh.start", reason=reason)
+    trace("catalog.refresh.start", level="debug", reason=reason)
     try:
         from opencode_go_proxy import catalog as _catalog
         from opencode_go_proxy.zen_catalog import capture_zen_models
@@ -674,7 +674,7 @@ def _refresh_catalog_once(reason: str) -> None:
         _catalog.refresh_runtime_catalog()
         _catalog.render_merged_catalog()
     except Exception as exc:  # noqa: BLE001 - background refresh is best-effort
-        trace("catalog.refresh.skipped", error=str(exc))
+        trace("catalog.refresh.skipped", level="warn", error=str(exc))
 
 
 def _refresh_catalog_in_background() -> None:
@@ -701,7 +701,6 @@ def _refresh_catalog_daemon(interval_hours: float = CATALOG_REFRESH_INTERVAL_HOU
         time.sleep(interval_hours * 3600)
         if not _catalog_refresh_enabled():
             continue
-        trace("catalog.refresh.tick", interval_hours=interval_hours)
         _refresh_catalog_once(reason="timer")
 
 
@@ -810,7 +809,7 @@ def main(argv: list[str] | None = None) -> None:
         native_models.capture_native_models()
         _catalog.render_merged_catalog()
     except Exception as exc:  # noqa: BLE001 - startup catalog render is best-effort
-        trace("catalog.refresh.skipped", error=str(exc))
+        trace("catalog.refresh.skipped", level="warn", error=str(exc))
     config = ProxyConfig(
         bind=args.bind,
         port=args.port,
@@ -821,7 +820,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     if config.bind not in {"127.0.0.1", "localhost", "::1"}:
         trace(
-            "security.remote_enabled",
+            "security.remote_enabled", level="info",
             bind=config.bind,
             message="non-loopback listener protected by a separate caller token",
         )
@@ -834,11 +833,11 @@ def main(argv: list[str] | None = None) -> None:
     try:
         _install_upstream_pool()
     except Exception as exc:  # noqa: BLE001 - fall back to unpooled stdlib
-        trace("upstream.pool_install_failed", error=str(exc))
+        trace("upstream.pool_install_failed", level="warn", error=str(exc))
     if _listener_already_active(config.bind, config.port):
         # Refuse to become a second listener (see helper docstring).
         trace(
-            "server.start_refused",
+            "server.start_refused", level="error",
             bind=config.bind,
             port=config.port,
             reason="another instance is already listening on this port",
@@ -847,7 +846,7 @@ def main(argv: list[str] | None = None) -> None:
     server = ProxyHTTPServer((config.bind, config.port), ResponsesProxyHandler)
     server.config = config  # type: ignore[attr-defined]
     trace(
-        "server.start",
+        "server.start", level="info",
         bind=config.bind,
         port=config.port,
         chat_base_url=config.chat_base_url,
@@ -865,7 +864,7 @@ def main(argv: list[str] | None = None) -> None:
         _start_catalog_refresh()
         serve_thread.join()
     except KeyboardInterrupt:
-        trace("server.stop", reason="keyboard_interrupt")
+        trace("server.stop", level="info", reason="keyboard_interrupt")
     finally:
         server.server_close()
 

@@ -319,7 +319,7 @@ class CatalogRefreshTimerTests(unittest.TestCase):
 
         with mock.patch.object(proxy_app.time, "sleep", side_effect=fake_sleep), mock.patch.object(
             proxy_app, "_refresh_catalog_once"
-        ) as once, mock.patch.object(proxy_app, "trace") as traced, mock.patch.dict(
+        ) as once, mock.patch.dict(
             os.environ, {}, clear=False
         ):
             os.environ.pop("OPENCODE_GO_CATALOG_REFRESH", None)
@@ -330,8 +330,6 @@ class CatalogRefreshTimerTests(unittest.TestCase):
         # sleep raises, so exactly one refresh ran.
         self.assertEqual(sleeps, [6 * 3600, 6 * 3600])
         self.assertEqual(once.call_count, 1)
-        ticks = [c for c in traced.call_args_list if c.args[0] == "catalog.refresh.tick"]
-        self.assertEqual(len(ticks), 1)
 
     def test_refresh_daemon_stays_quiet_when_disabled(self) -> None:
         from opencode_go_proxy import app as proxy_app

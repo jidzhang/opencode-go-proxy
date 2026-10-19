@@ -307,7 +307,7 @@ def _safe_fixes() -> None:
             except Exception as exc:  # noqa: BLE001 - repair is best-effort
                 from .trace import trace
 
-                trace("doctor.fix.skipped", check="catalog", error=str(exc))
+                trace("doctor.fix.skipped", level="info", check="catalog", error=str(exc))
 
 
 def doctor(argv: list[str] | None = None) -> int:

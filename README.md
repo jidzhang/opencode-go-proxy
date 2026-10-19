@@ -384,8 +384,9 @@ The proxy is built for exactly that:
 ### Checking the hit ratio
 
 Every request with cache accounting is logged (look for `"cache": {...}` on
-`response.converted` trace lines). The aggregate is also exposed on a metrics
-endpoint:
+`response.converted` trace lines — a `debug`-level event, so run with
+`OPENCODE_GO_PROXY_LOG_LEVEL=debug` first). The aggregate is also exposed on
+a metrics endpoint:
 
 ```bash
 curl http://127.0.0.1:8787/cache
@@ -606,6 +607,20 @@ Upstream connections are pooled with keep-alive by default (no flag needed).
 traced as `upstream.pool` every `OPENCODE_GO_PROXY_POOL_REPORT_EVERY` opens
 (default `100`). Tracing is async and non-blocking by default;
 `OPENCODE_GO_PROXY_TRACE=0` turns it off.
+
+Every trace line is one JSON object with a `level` field (`debug` / `info` /
+`warn` / `error`): per-request telemetry (received/converted, upstream
+start/done) is `debug`; lifecycle milestones and rare routing decisions are
+`info`; handled failures and degradation (retries, timeouts, image or
+reasoning fallbacks) are `warn`; outright failures (handler crash,
+empty-stream exhaustion, refused start) are `error`. The minimum emitted
+level defaults to `info` (the proxy is under an active debugging period —
+`debug` adds the full per-request telemetry, and the intended steady-state
+default is `warn`, where a healthy proxy logs nothing per request). The
+start scripts expose a one-line switch (`LOG_LEVEL` in
+`start-proxy-19999.bat`, `OPENCODE_GO_PROXY_LOG_LEVEL` in the `.sh` twins).
+Filter a live log by severity with e.g.
+`jq 'select(.level=="warn" or .level=="error")'`.
 
 The proxy accepts both `/responses` and `/v1/responses`.
 

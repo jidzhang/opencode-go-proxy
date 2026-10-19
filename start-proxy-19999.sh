@@ -8,6 +8,12 @@ set -euo pipefail
 
 PROXY_BIND="${OPENCODE_GO_PROXY_BIND:-127.0.0.1}"
 PROXY_PORT="${OPENCODE_GO_PROXY_PORT:-19999}"
+# Log verbosity switch: warn | info | debug.
+#   warn  = quiet: only retries/failures/degradation reach the log
+#   info  = + lifecycle events (server start/stop, credential source, fallbacks)
+#   debug = + full per-request telemetry (received/converted, upstream start/done)
+# Debugging period runs on info; flip to warn when it wraps up.
+export OPENCODE_GO_PROXY_LOG_LEVEL="${OPENCODE_GO_PROXY_LOG_LEVEL:-info}"
 
 if [[ -z "${OPENCODE_GO_API_KEY:-}" ]]; then
   echo "[input] OPENCODE_GO_API_KEY is not set." >&2

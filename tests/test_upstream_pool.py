@@ -308,7 +308,7 @@ class TestTraceAsync:
             assert trace_mod._queue.qsize() == before
 
     def test_enabled_trace_drains(self) -> None:
-        with mock.patch.dict(os.environ, {trace_mod.TRACE_ENV: "1"}):
+        with mock.patch.dict(os.environ, {trace_mod.TRACE_ENV: "1", trace_mod.LEVEL_ENV: "debug"}):
             trace_mod.trace("unit.drain_probe", marker="p0p1p2")
             deadline = time.time() + 5.0
             while not trace_mod._queue.empty() and time.time() < deadline:
@@ -316,7 +316,7 @@ class TestTraceAsync:
             assert trace_mod._queue.empty()
 
     def test_full_queue_drops_without_blocking(self) -> None:
-        with mock.patch.dict(os.environ, {trace_mod.TRACE_ENV: "1"}):
+        with mock.patch.dict(os.environ, {trace_mod.TRACE_ENV: "1", trace_mod.LEVEL_ENV: "debug"}):
             with trace_mod._dropped_lock:
                 trace_mod._dropped = 0
             started = time.time()

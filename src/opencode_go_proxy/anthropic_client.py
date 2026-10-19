@@ -723,7 +723,7 @@ class AnthropicStreamEngine(_ZenStreamEngine):
         if not self.translator.consume(event):
             self.client_alive = False
             trace(
-                "client.disconnected",
+                "client.disconnected", level="info",
                 request_id=self.request_id,
                 message="client closed connection during stream",
             )
@@ -767,14 +767,14 @@ def handle_anthropic_messages_request(
         responses_payload = dict(responses_payload)
         responses_payload["input"] = cleaned
         trace(
-            "request.dangling_calls_dropped",
+            "request.dangling_calls_dropped", level="warn",
             request_id=request_id,
             provider=GO_PROVIDER,
             model=model,
             dropped=dropped_ids,
         )
     trace(
-        "request.converted",
+        "request.converted", level="debug",
         request_id=request_id,
         surface="anthropic_messages",
         stats=stats,
@@ -821,7 +821,7 @@ def handle_anthropic_messages_request(
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
     trace(
-        f"{GO_PROVIDER}.start",
+        f"{GO_PROVIDER}.start", level="debug",
         request_id=request_id,
         url=url,
         bytes=len(raw_payload),
@@ -959,7 +959,7 @@ def _feed_translated_stream(
     ) as exc:
         outcome = "aborted"
         trace(
-            "upstream.stream_aborted",
+            "upstream.stream_aborted", level="warn",
             request_id=request_id,
             status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
         )
@@ -1006,7 +1006,7 @@ def _relay_responses_stream_translated(
 
     def _done(outcome: str, **extra: Any) -> None:
         trace(
-            f"{GO_PROVIDER}.done",
+            f"{GO_PROVIDER}.done", level="debug",
             request_id=request_id,
             family="openai_responses",
             stream=True,
@@ -1047,7 +1047,7 @@ def _relay_responses_stream_translated(
                 return
             wait_ms = waits[min(attempt - 1, len(waits) - 1)]
             trace(
-                f"{GO_PROVIDER}.empty_retry",
+                f"{GO_PROVIDER}.empty_retry", level="warn",
                 request_id=request_id,
                 family="openai_responses",
                 stream=True,
@@ -1068,7 +1068,7 @@ def _relay_responses_stream_translated(
             except _ConnectFailed as fail:
                 exc = fail.exc
                 trace(
-                    f"{GO_PROVIDER}.empty_retry_failed",
+                    f"{GO_PROVIDER}.empty_retry_failed", level="error",
                     request_id=request_id,
                     attempt=attempt + 1,
                     status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),

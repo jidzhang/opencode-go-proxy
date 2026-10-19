@@ -19,6 +19,9 @@ set -euo pipefail
 
 PROXY_BIND="${OPENCODE_GO_PROXY_BIND:-127.0.0.1}"
 PROXY_PORT="${OPENCODE_GO_PROXY_PORT:-19999}"
+# Log verbosity switch: warn | info (debugging period) | debug. See
+# start-proxy-19999.sh for what each level adds; flip to warn when it wraps up.
+export OPENCODE_GO_PROXY_LOG_LEVEL="${OPENCODE_GO_PROXY_LOG_LEVEL:-info}"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="/tmp/proxy${PROXY_PORT}.log"
 RESTART_LOG="/tmp/restart-proxy${PROXY_PORT}.log"

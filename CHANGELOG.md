@@ -41,6 +41,26 @@
   instead of handing Claude Code an empty reply. Upstream terminal errors
   are still delivered immediately, never retried.
 
+### Changed
+
+- The structured trace stream was redesigned around severity levels instead
+  of an undifferentiated stderr flood. Every JSON line now carries a `level`
+  (`debug`/`info`/`warn`/`error`) and every trace site is tagged by what it
+  means: per-request telemetry (received/converted, upstream start/done) is
+  `debug`; lifecycle and routing milestones (server start/stop, credential
+  source, go-reject zen fallback) are `info`; handled failures and
+  degradation (upstream retries/timeouts/errors, empty-stream retries,
+  image/reasoning fallbacks, refresh skipped) are `warn`; outright failures
+  (handler crash, empty-stream exhaustion, refused start) are `error`.
+  Events that earned no keep were removed outright (`credential.lookup`,
+  `catalog.refresh.tick`, `split_turn.caption_cache_hit` — outcome events
+  already cover them). `OPENCODE_GO_PROXY_LOG_LEVEL` sets the minimum
+  emitted level, currently defaulting to `info` for an active debugging
+  period (the steady-state default is `warn`, where a healthy proxy stays
+  silent); the start scripts carry a one-line `LOG_LEVEL` switch
+  (warn/info/debug). Filtering happens before the async queue, and
+  `OPENCODE_GO_PROXY_TRACE=0` still disables tracing entirely.
+
 ### Fixed
 
 - Empty-stream exhaustion no longer ends a Responses-family turn with a
