@@ -1,20 +1,29 @@
 @echo off
 setlocal
-REM opencode-go-proxy LAN share: desktop 192.168.124.99:19999
-REM Manual run only. Upstream (opencode.ai) goes via 127.0.0.1:9674.
+REM Manual run: serves on 0.0.0.0:19999 for LAN share.
+REM Machine-local values (LAN IP, upstream proxy) come from proxy-local.bat
+REM (gitignored) or the OPENCODE_GO_PROXY_LAN_IP / OPENCODE_GO_PROXY_UPSTREAM
+REM env vars. Egress goes through the upstream only when one is set;
+REM otherwise the proxy connects to the API directly.
 REM NO_PROXY below applies to this proxy process only. Codex runs in its own shell
 REM and needs its own NO_PROXY if a system proxy is set.
 
-set PROXY_PORT=19999
-set DESKTOP_IP=192.168.124.99
-set UPSTREAM_PROXY=http://127.0.0.1:9674
+if exist "%~dp0proxy-local.bat" call "%~dp0proxy-local.bat"
 
-set HTTP_PROXY=%UPSTREAM_PROXY%
-set HTTPS_PROXY=%UPSTREAM_PROXY%
-set http_proxy=%UPSTREAM_PROXY%
-set https_proxy=%UPSTREAM_PROXY%
-set NO_PROXY=localhost,127.0.0.1,::1,%DESKTOP_IP%,192.168.0.0/16,10.0.0.0/8
-set no_proxy=%NO_PROXY%
+set PROXY_PORT=19999
+set "DESKTOP_IP=%OPENCODE_GO_PROXY_LAN_IP%"
+set "UPSTREAM_PROXY=%OPENCODE_GO_PROXY_UPSTREAM%"
+
+set "LAN_NO_PROXY="
+if defined DESKTOP_IP set "LAN_NO_PROXY=,%DESKTOP_IP%"
+set "NO_PROXY=localhost,127.0.0.1,::1%LAN_NO_PROXY%,192.168.0.0/16,10.0.0.0/8"
+if defined UPSTREAM_PROXY (
+  set "HTTP_PROXY=%UPSTREAM_PROXY%"
+  set "HTTPS_PROXY=%UPSTREAM_PROXY%"
+  set "http_proxy=%UPSTREAM_PROXY%"
+  set "https_proxy=%UPSTREAM_PROXY%"
+  set "no_proxy=%NO_PROXY%"
+)
 
 set OPENCODE_GO_PROXY_ALLOW_REMOTE=1
 set OPENCODE_GO_PROXY_BIND=0.0.0.0
@@ -36,8 +45,12 @@ if not defined OPENCODE_GO_PROXY_CALLER_TOKEN (
 
 echo.
 echo [proxy] bind=0.0.0.0 port=%PROXY_PORT%
-echo [proxy] upstream via %UPSTREAM_PROXY% (NO_PROXY=%NO_PROXY%)
-echo [proxy] LAN URL for laptops: http://%DESKTOP_IP%:%PROXY_PORT%/v1
+if defined UPSTREAM_PROXY echo [proxy] upstream via %UPSTREAM_PROXY%, NO_PROXY=%NO_PROXY%
+if defined DESKTOP_IP (
+  echo [proxy] LAN URL for laptops: http://%DESKTOP_IP%:%PROXY_PORT%/v1
+) else (
+  echo [proxy] LAN URL: set OPENCODE_GO_PROXY_LAN_IP in proxy-local.bat to advertise one.
+)
 echo [proxy] laptops must set same CALLER_TOKEN as env OPENCODE_GO_PROXY_CALLER_TOKEN
 echo.
 
