@@ -1,0 +1,5 @@
+# cmd.exe misparses LF-only batch files (goto/label can be skipped), so bats
+# must check out with CRLF on every machine regardless of core.autocrlf.
+*.bat text eol=crlf
+# Conversely, shell scripts with CRLF break on Linux (\r in the shebang).
+*.sh text eol=lf
