@@ -197,7 +197,7 @@ def _relay_stream(
                     if not _write_empty_stream_error(ka):
                         outcome = "gone"
                         trace(
-                            "client.disconnected",
+                            "client.disconnected", level="info",
                             request_id=request_id,
                             message="client closed connection during stream",
                         )
@@ -207,7 +207,7 @@ def _relay_stream(
                 if not ka.write(line):
                     outcome = "gone"
                     trace(
-                        "client.disconnected",
+                        "client.disconnected", level="info",
                         request_id=request_id,
                         message="client closed connection during stream",
                     )
@@ -217,7 +217,7 @@ def _relay_stream(
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
         outcome = "aborted"
         trace(
-            "upstream.stream_aborted",
+            "upstream.stream_aborted", level="warn",
             request_id=request_id,
             status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)),
         )
@@ -251,7 +251,7 @@ def relay_native_request(handler: Any, payload: Json, config: ProxyConfig, reque
         method="POST",
     )
     trace(
-        "native.start",
+        "native.start", level="debug",
         request_id=request_id,
         url=url,
         bytes=len(raw_payload),
@@ -290,20 +290,20 @@ def relay_native_request(handler: Any, payload: Json, config: ProxyConfig, reque
         handler.end_headers()
         outcome = _relay_stream(response, handler, request_id)
         if outcome == "aborted":
-            trace("native.done", request_id=request_id, status=502, outcome=outcome, elapsed_ms=elapsed_ms)
+            trace("native.done", level="debug", request_id=request_id, status=502, outcome=outcome, elapsed_ms=elapsed_ms)
             record_usage_event(
                 model=model, status=502, duration_ms=elapsed_ms,
                 stream_aborted=True, provider=NATIVE_PROVIDER,
             )
             return
         if outcome == "gone":
-            trace("native.done", request_id=request_id, status=0, outcome=outcome, elapsed_ms=elapsed_ms)
+            trace("native.done", level="debug", request_id=request_id, status=0, outcome=outcome, elapsed_ms=elapsed_ms)
             record_usage_event(
                 model=model, status=0, duration_ms=elapsed_ms,
                 stream_aborted=True, provider=NATIVE_PROVIDER,
             )
             return
-        trace("native.done", request_id=request_id, status=200, outcome=outcome, elapsed_ms=elapsed_ms)
+        trace("native.done", level="debug", request_id=request_id, status=200, outcome=outcome, elapsed_ms=elapsed_ms)
         record_usage_event(
             model=model, status=200, duration_ms=elapsed_ms, provider=NATIVE_PROVIDER,
         )
@@ -312,7 +312,7 @@ def relay_native_request(handler: Any, payload: Json, config: ProxyConfig, reque
     body = response.read()
     content_type = response.headers.get("content-type") or "application/json"
     _relay_status(handler, response.status, content_type, body, response.headers)
-    trace("native.done", request_id=request_id, status=response.status, elapsed_ms=elapsed_ms)
+    trace("native.done", level="debug", request_id=request_id, status=response.status, elapsed_ms=elapsed_ms)
     record_usage_event(
         model=model, status=response.status,
         duration_ms=elapsed_ms, provider=NATIVE_PROVIDER,

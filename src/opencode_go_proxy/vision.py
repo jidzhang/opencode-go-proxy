@@ -467,7 +467,7 @@ class RemoteVisionAdapter:
             # The pinned/auto model may reject image input; fall back to the
             # known vision model for this one sub-call.
             model = IMAGE_MODEL_DEFAULT
-            trace("split_turn.caption_fallback", request_id=request_id, kind="engine", model=model, status=_caption_rejection_status(exc))
+            trace("split_turn.caption_fallback", level="warn", request_id=request_id, kind="engine", model=model, status=_caption_rejection_status(exc))
             chat, exc = _caption_attempt(url, model, detail, prompt, config, request_id)
         if exc is not None and _caption_rejection_status(exc) in CAPTION_FALLBACK_STATUSES and detail is not None:
             # Unknown detail values can 4xx on some upstreams; retry with a
@@ -476,7 +476,7 @@ class RemoteVisionAdapter:
             if downscaled is not None:
                 url = downscaled
             detail = None
-            trace("split_turn.caption_fallback", request_id=request_id, kind="detail", status=_caption_rejection_status(exc))
+            trace("split_turn.caption_fallback", level="warn", request_id=request_id, kind="detail", status=_caption_rejection_status(exc))
             chat, exc = _caption_attempt(url, model, detail, prompt, config, request_id)
         if exc is not None:
             return None, exc
@@ -577,7 +577,6 @@ def describe(
     image_bytes = image_bytes_for_cache(image_url)
     cached = CAPTION_CACHE.get(image_bytes)
     if cached is not None:
-        trace("split_turn.caption_cache_hit", request_id=request_id)
         return Evidence(kind=classify_evidence(cached), text=cached, cached=True)
 
     if engines is None:
@@ -605,7 +604,7 @@ def describe(
         last_adapter = adapter
         last_error = exc
         trace(
-            "split_turn.caption_failed",
+            "split_turn.caption_failed", level="warn",
             request_id=request_id,
             engine=adapter.model,
             status=_error_status(exc),
@@ -666,7 +665,7 @@ def caption_images_in_messages(chat_payload: dict[str, Any], target_model: str, 
 
     chat_payload["model"] = target_model
     trace(
-        "split_turn.captioned",
+        "split_turn.captioned", level="debug",
         request_id=request_id,
         captions=1,
         omitted=len(image_jobs) - 1,

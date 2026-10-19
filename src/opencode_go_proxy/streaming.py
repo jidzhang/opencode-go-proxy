@@ -200,7 +200,7 @@ def _open_upstream_stream(
             raw = exc.read()
             body = raw.decode("utf-8", errors="replace")
             trace(
-                "upstream.error",
+                "upstream.error", level="warn",
                 request_id=request_id,
                 status=exc.code,
                 body=_mask_trace_body(body),
@@ -208,7 +208,7 @@ def _open_upstream_stream(
             )
             if retriable_http_failure(exc.code, body) and attempts < max_retries:
                 attempts += 1
-                trace("upstream.retry", request_id=request_id, attempt=attempts, status=exc.code)
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=attempts, status=exc.code)
                 retry_sleep(attempts)
                 continue
             raise _ConnectFailed(exc, attempts, body.encode("utf-8", errors="replace")) from exc
@@ -218,10 +218,10 @@ def _open_upstream_stream(
             # blip that used to escape as an unhandled crash); HTTPException
             # covers the pure-http.client failures incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
-            trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
+            trace("upstream.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if attempts < max_retries:
                 attempts += 1
-                trace("upstream.retry", request_id=request_id, attempt=attempts, reason=str(getattr(exc, "reason", exc)))
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=attempts, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(attempts)
                 continue
             raise _ConnectFailed(exc, attempts) from exc
@@ -298,7 +298,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
         # and the cache accounting (prompt_cache_hit_tokens / cached_tokens)
         # never reaches the proxy.
         chat_payload["stream_options"] = {"include_usage": True}
-        trace("request.converted", request_id=request_id, stats=conversion_stats,
+        trace("request.converted", level="debug", request_id=request_id, stats=conversion_stats,
               upstream_model=chat_payload.get("model"), stream=True)
 
         response_id = new_response_id()
@@ -320,7 +320,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
             event_bytes = b"data: " + json.dumps(event, separators=(",", ":")).encode("utf-8") + b"\n\n"
             if not _write(event_bytes):
                 client_alive = False
-                trace("client.disconnected", request_id=request_id, message="client closed connection during stream")
+                trace("client.disconnected", level="info", request_id=request_id, message="client closed connection during stream")
                 return
             relayed_event = True
 
@@ -349,7 +349,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
             }, method="POST")
 
         req = _make_req()
-        trace("upstream.start", request_id=request_id, url=url, bytes=len(raw_payload), stream=True)
+        trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), stream=True)
         started = time.time()
 
         # Accumulated state shared across attempts so an empty-completion retry
@@ -474,13 +474,13 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
                     ):
                         fell_back = True
                         fallback_attempts += 1
-                        trace("image_fallback", request_id=request_id, kind="caption", status=exc.code,
+                        trace("image_fallback", level="warn", request_id=request_id, kind="caption", status=exc.code,
                               model=request_model, stream=True)
                         chat_payload = caption_images_in_messages(chat_payload, request_model, config, request_id)
                         conversion_stats["upstream_model"] = chat_payload.get("model")
                         raw_payload = json.dumps(chat_payload, separators=(",",":")).encode("utf-8")
                         req = _make_req()
-                        trace("upstream.start", request_id=request_id, url=url, bytes=len(raw_payload),
+                        trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload),
                               stream=True, fallback=True)
                         return "fallback"
                     from opencode_go_proxy.app import (
@@ -498,7 +498,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
                         # re-dispatch the identical original payload through the
                         # zen streaming relay, which emits its own
                         # response.created and meters provider="zen".
-                        trace("fallback.go_reject_zen", request_id=request_id, model=session_model,
+                        trace("fallback.go_reject_zen", level="info", request_id=request_id, model=session_model,
                               status=exc.code, path="responses", stream=True)
                         keepalive_stop.set()
                         ka_thread.join(timeout=interval)
@@ -617,17 +617,17 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
                 # Surface an error and mark the turn as aborted so the meter never
                 # records a success the client never received.
                 code = exc.code if isinstance(exc, urllib.error.HTTPError) else None
-                trace("upstream.stream_aborted", request_id=request_id,
+                trace("upstream.stream_aborted", level="warn", request_id=request_id,
                       status=code or getattr(exc, "reason", str(exc)))
                 send_error("upstream stream aborted")
                 record_usage_event(model=model, status=502, duration_ms=int((time.time() - started) * 1000),
                                    stream_aborted=True, retries=total_retries + fallback_attempts)
                 return "error"
 
-            trace("upstream.done", request_id=request_id, status=200,
+            trace("upstream.done", level="debug", request_id=request_id, status=200,
                   elapsed_ms=int((time.time() - started) * 1000), stream=True)
             if not client_alive:
-                trace("client.gone", request_id=request_id, message="client disconnected before final events")
+                trace("client.gone", level="info", request_id=request_id, message="client disconnected before final events")
                 record_usage_event(model=model, status=0, duration_ms=int((time.time() - started) * 1000),
                                    stream_aborted=True, retries=total_retries)
                 return "gone"
@@ -748,7 +748,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
         }
         send_event({"type": "response.completed", "response": final})
         _write(b"data: [DONE]\n\n")
-        trace("response.converted", request_id=request_id, output_items=len(output),
+        trace("response.converted", level="debug", request_id=request_id, output_items=len(output),
               output_text_len=len(text), usage=final.get("usage"), stream=True,
               cache=cache_stats_from_usage(usage))
         # An empty 200 never reaches this finalize path (it retries then errors
@@ -781,7 +781,7 @@ def handle_chat_stream_passthrough(payload: Json, config: ProxyConfig, request_i
         "accept": "text/event-stream",
         "user-agent": upstream_user_agent(),
     }, method="POST")
-    trace("upstream.start", request_id=request_id, url=url, bytes=len(raw_payload), stream=True)
+    trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), stream=True)
 
     try:
         response, retries = _open_upstream_stream(req, config, request_id, default_max_retries())
@@ -806,7 +806,7 @@ def handle_chat_stream_passthrough(payload: Json, config: ProxyConfig, request_i
                 # status/body or SSE head; it takes the zen/ prefix (its API
                 # contract) and strips it before sending, so the wire request
                 # keeps the identical messages/tools/stream and the bare id.
-                trace("fallback.go_reject_zen", request_id=request_id, model=model,
+                trace("fallback.go_reject_zen", level="info", request_id=request_id, model=model,
                       status=exc.code, path="chat/completions", stream=True)
                 zen_payload = dict(payload)
                 zen_payload["model"] = f"{ZEN_PREFIX}{model}"
@@ -889,7 +889,7 @@ def handle_chat_stream_passthrough(payload: Json, config: ProxyConfig, request_i
                 # cancelling client visible instead of metering a full 200.
                 if _client_gone(handler.wfile):
                     client_alive = False
-                    trace("client.disconnected", request_id=request_id,
+                    trace("client.disconnected", level="info", request_id=request_id,
                           message="client closed connection during stream")
                     break
                 try:
@@ -898,20 +898,20 @@ def handle_chat_stream_passthrough(payload: Json, config: ProxyConfig, request_i
                         handler.wfile.flush()
                 except (BrokenPipeError, OSError):
                     client_alive = False
-                    trace("client.disconnected", request_id=request_id,
+                    trace("client.disconnected", level="info", request_id=request_id,
                           message="client closed connection during stream")
                     break
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
         # The SSE head is already committed (including a truncated upstream body:
         # http.client.IncompleteRead); terminate the relay without rendering a
         # second HTTP response inside the stream.
-        trace("upstream.stream_aborted", request_id=request_id,
+        trace("upstream.stream_aborted", level="warn", request_id=request_id,
               status=getattr(exc, "code", None) or getattr(exc, "reason", str(exc)))
     finally:
         keepalive_stop.set()
 
     elapsed_ms = int((time.time() - started) * 1000)
-    trace("upstream.done", request_id=request_id, status=response.status, elapsed_ms=elapsed_ms, stream=True)
+    trace("upstream.done", level="debug", request_id=request_id, status=response.status, elapsed_ms=elapsed_ms, stream=True)
     if not client_alive:
         # The client cancelled before the relay finished; the upstream's 200 is
         # not a success the client ever received, so meter the abort.
@@ -992,7 +992,7 @@ def _zen_error_terminal(wfile: Any, status: int, body: bytes | None = None, *, m
     except (BrokenPipeError, OSError):
         # The client went away while the terminal event was being written; the
         # turn outcome is already metered by the zen relay, so nothing remains.
-        trace("client.disconnected", message="client closed connection during zen error terminal")
+        trace("client.disconnected", level="info", message="client closed connection during zen error terminal")
 
 
 def _zen_fallback_stream(
@@ -1030,7 +1030,7 @@ def _zen_fallback_stream(
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
-    trace("zen.start", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True)
+    trace("zen.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), family=family, stream=True)
     shim = _ZenFallbackHandler(wfile)
 
     if family == "openai_responses":
@@ -1056,7 +1056,7 @@ def _zen_fallback_stream(
             _meter_zen(model, started, 0, stream_aborted=True, retries=retries or None)
         else:
             _meter_zen(model, started, 502, stream_aborted=True, retries=retries or None)
-        trace("zen.done", request_id=request_id, family=family, stream=True, outcome=outcome)
+        trace("zen.done", level="debug", request_id=request_id, family=family, stream=True, outcome=outcome)
         return
 
     engine = _ZenStreamEngine(

@@ -167,7 +167,7 @@ def _handle_go_verbatim_request(
         method="POST",
     )
     trace(
-        "opencode-go.start",
+        "opencode-go.start", level="debug",
         request_id=request_id,
         url=url,
         bytes=len(raw),

@@ -823,7 +823,7 @@ def refresh_catalog(
         # fresh copy regardless of the stored etag.
         discovered, upstream_etag = discover_models(etag=None if force else stored_etag)
     except CatalogNotModified:
-        trace("catalog.refresh.cached", etag=stored_etag)
+        trace("catalog.refresh.cached", level="debug", etag=stored_etag)
         # 304: OpenCode Go content is unchanged. Keep the existing compact (and
         # its etag) untouched and skip the re-render; serve the catalog that
         # is already on disk. Render only in the degenerate case where a

@@ -139,7 +139,7 @@ def _write_json(path: str, value: dict) -> None:
         try:
             os.unlink(tmp)
         except OSError as exc:
-            trace("zen_catalog.cleanup_failed", path=tmp, error=str(exc))
+            trace("zen_catalog.cleanup_failed", level="warn", path=tmp, error=str(exc))
         raise
 
 
@@ -151,7 +151,7 @@ def _load_capture(path: str) -> dict | None:
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:
-        trace("zen_catalog.load_failed", path=path, error=str(exc))
+        trace("zen_catalog.load_failed", level="warn", path=path, error=str(exc))
         return None
     if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
         return None
@@ -201,7 +201,7 @@ def _fetch_models_dev_families(timeout: int = MODELS_DEV_TIMEOUT_SEC) -> dict[st
         with urllib.request.urlopen(request, timeout=timeout) as resp:
             payload = json.load(resp)
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        trace("zen_catalog.models_dev_failed", error=str(exc))
+        trace("zen_catalog.models_dev_failed", level="warn", error=str(exc))
         return {}
     provider = payload.get("opencode") if isinstance(payload, dict) else None
     models = provider.get("models") if isinstance(provider, dict) else None
@@ -261,7 +261,7 @@ def capture_zen_models(
     try:
         entries = _fetch_zen_models()
     except ZenModelFetchError as exc:
-        trace("zen_catalog.fetch_failed", error=str(exc))
+        trace("zen_catalog.fetch_failed", level="warn", error=str(exc))
         cached = _load_capture(models_path)
         return cached if cached is not None else {"fetched_at": iso, "models": []}
 
@@ -356,7 +356,7 @@ def _read_persisted_families(path: str) -> dict[str, str]:
     except FileNotFoundError:
         return {}
     except (OSError, json.JSONDecodeError) as exc:
-        trace("zen_catalog.read_failed", path=path, error=str(exc))
+        trace("zen_catalog.read_failed", level="warn", path=path, error=str(exc))
         return {}
     raw = payload.get("models") if isinstance(payload, dict) else None
     if not isinstance(raw, dict):

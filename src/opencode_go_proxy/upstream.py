@@ -176,14 +176,14 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
             url, api_key, raw_payload, "application/json",
             session_headers=opencode_session_headers(None, chat_payload),
         )
-        trace("upstream.start", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
+        trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
         started = time.time()
         try:
             with urllib.request.urlopen(request, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec) as response:
                 body = response.read()
                 record_quota_from_headers(getattr(response, "headers", None))
                 elapsed_ms = int((time.time() - started) * 1000)
-                trace("upstream.done", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
+                trace("upstream.done", level="debug", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
                 try:
                     value = json.loads(body)
                 except json.JSONDecodeError:
@@ -195,7 +195,7 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
             raw = exc.read()
             body = raw.decode("utf-8", errors="replace")
             trace(
-                "upstream.error",
+                "upstream.error", level="warn",
                 request_id=request_id,
                 status=exc.code,
                 body=_mask_trace_body(body),
@@ -203,7 +203,7 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
             )
             if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, status=exc.code)
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
                 continue
             if exc.code == 429:
@@ -236,10 +236,10 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
                 body=body,
             ) from exc
         except TimeoutError:
-            trace("upstream.timeout", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
+            trace("upstream.timeout", level="warn", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
             if retries < max_retries:
                 retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, reason="timeout")
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None
@@ -247,10 +247,10 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
         except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
-            trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
+            trace("upstream.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
@@ -282,21 +282,21 @@ def call_upstream_chat_verbatim(
             url, api_key, raw_payload, "application/json",
             session_headers=opencode_session_headers(None, chat_payload),
         )
-        trace("upstream.start", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
+        trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
         started = time.time()
         try:
             with urllib.request.urlopen(request, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec) as response:
                 body = response.read()
                 record_quota_from_headers(getattr(response, "headers", None))
                 elapsed_ms = int((time.time() - started) * 1000)
-                trace("upstream.done", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
+                trace("upstream.done", level="debug", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
                 return response.status, body, retries, response.headers.get("content-type"), (response.headers or {}).get("retry-after")
         except urllib.error.HTTPError as exc:
             body = exc.read()
-            trace("upstream.error", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
+            trace("upstream.error", level="warn", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
             if retriable_http_failure(exc.code, body) and retries < max_retries:
                 retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, status=exc.code)
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
                 continue
             normalized = normalize_usage_limit_error(body)
@@ -304,10 +304,10 @@ def call_upstream_chat_verbatim(
                 body = normalized
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), (exc.headers or {}).get("retry-after")
         except TimeoutError:
-            trace("upstream.timeout", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
+            trace("upstream.timeout", level="warn", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
             if retries < max_retries:
                 retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, reason="timeout")
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None
@@ -315,10 +315,10 @@ def call_upstream_chat_verbatim(
         except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
-            trace("upstream.network_error", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
+            trace("upstream.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
             if retries < max_retries:
                 retries += 1
-                trace("upstream.retry", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
+                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(retries)
                 continue
             raise ProxyError(HTTPStatus.BAD_GATEWAY, f"upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc

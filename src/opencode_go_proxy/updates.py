@@ -175,13 +175,13 @@ def _write_cache(payload: Json) -> None:
     try:
         fd = os.open(_cache_path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, CACHE_MODE)
     except OSError as exc:
-        trace("updates.cache_write_failed", error=str(exc))
+        trace("updates.cache_write_failed", level="warn", error=str(exc))
         return
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, separators=(",", ":"))
     except OSError as exc:
-        trace("updates.cache_write_failed", error=str(exc))
+        trace("updates.cache_write_failed", level="warn", error=str(exc))
 
 
 def _info_from_cache(current: str, cached: Json) -> UpdateInfo:
@@ -273,7 +273,7 @@ def _git_commit() -> str | None:
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        trace("updates.git_commit_failed", error=str(exc))
+        trace("updates.git_commit_failed", level="warn", error=str(exc))
         return None
     if result.returncode != 0:
         return None

@@ -181,7 +181,7 @@ def _summarize_go(model: str, transcript: str, config: ProxyConfig, request_id: 
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     trace(
-        "compaction.summarize",
+        "compaction.summarize", level="debug",
         request_id=request_id,
         target=GO_PROVIDER,
         model=bare,
@@ -229,7 +229,7 @@ def _summarize_zen(model: str, transcript: str, config: ProxyConfig, request_id:
         zen_payload, family, bare_id, api_key, stream=False, session_model=model
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    trace("compaction.summarize", request_id=request_id, target="zen", model=bare_id, transcript_chars=len(transcript))
+    trace("compaction.summarize", level="debug", request_id=request_id, target="zen", model=bare_id, transcript_chars=len(transcript))
     value, retries = _zen_post(url, raw_payload, headers, config, request_id)
     summary = _responses_text(_translate_response(value, family, model)) or PLACEHOLDER_SUMMARY
     inp, outp, total = _zen_tokens(value, family)
@@ -358,7 +358,7 @@ def handle_compaction(
         provider=provider,
     )
     trace(
-        "compaction.done",
+        "compaction.done", level="info",
         request_id=request_id,
         v2=v2,
         model=model,

@@ -84,11 +84,10 @@ def resolve_api_key(config: ProxyConfig, request_id: str) -> str:
             api_key = os.environ.get(env)
             if api_key:
                 _api_key_cache = api_key
-                trace("credential.source", request_id=request_id, source="env", env=env)
+                trace("credential.source", level="info", request_id=request_id, source="env", env=env)
                 return api_key
 
         for keychain_service in keychain_services():
-            trace("credential.lookup", request_id=request_id, source="keychain", service=keychain_service)
             try:
                 completed = subprocess.run(
                     ["security", "find-generic-password", "-a", os.environ.get("USER", ""), "-s", keychain_service, "-w"],
@@ -100,7 +99,7 @@ def resolve_api_key(config: ProxyConfig, request_id: str) -> str:
                 first_line = completed.stdout.splitlines()[0].strip() if completed.stdout.splitlines() else ""
                 if first_line:
                     _api_key_cache = first_line
-                    trace("credential.source", request_id=request_id, source="keychain", service=keychain_service)
+                    trace("credential.source", level="info", request_id=request_id, source="keychain", service=keychain_service)
                     return first_line
 
         raise ProxyError(

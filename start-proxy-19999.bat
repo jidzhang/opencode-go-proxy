@@ -28,6 +28,13 @@ if defined UPSTREAM_PROXY (
 set OPENCODE_GO_PROXY_ALLOW_REMOTE=1
 set OPENCODE_GO_PROXY_BIND=0.0.0.0
 set OPENCODE_GO_PROXY_PORT=%PROXY_PORT%
+REM ---- Log verbosity switch: warn | info (current) | debug ----------------
+REM warn  = quiet: only retries/failures/degradation reach logs\proxy-19999.log
+REM info  = + lifecycle events (server start/stop, credential source, fallbacks)
+REM debug = + full per-request telemetry (received/converted, upstream start/done)
+REM Debugging period runs on info; flip to warn when it wraps up.
+set "LOG_LEVEL=info"
+set "OPENCODE_GO_PROXY_LOG_LEVEL=%LOG_LEVEL%"
 REM Request-body dump is OFF by default (each body is ~1MB; a day fills GBs).
 REM To bisect a gateway 400 offline, uncomment the next line (no credentials in
 REM dump - auth travels in headers). Remember to delete logs\request-dump after.

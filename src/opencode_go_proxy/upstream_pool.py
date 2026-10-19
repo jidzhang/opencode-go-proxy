@@ -391,7 +391,7 @@ def _note_open() -> None:
         _opens_since_report = 0
         from .trace import trace
 
-        trace("upstream.pool", **pool_stats())
+        trace("upstream.pool", level="debug", **pool_stats())
 
 
 def _wrap(

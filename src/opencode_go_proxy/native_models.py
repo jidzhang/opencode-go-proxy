@@ -151,7 +151,7 @@ def capture_native_models(*, dry_run: bool = False) -> Json:
                 try:
                     os.unlink(tmp)
                 except OSError as exc:
-                    trace("native_capture.cleanup_failed", path=tmp, error=str(exc))
+                    trace("native_capture.cleanup_failed", level="warn", path=tmp, error=str(exc))
     return snapshot
 
 
