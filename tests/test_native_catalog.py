@@ -42,17 +42,14 @@ NATIVE_FIXTURE = {
 }
 
 
-def _write_fake_codex_bin(bin_path) -> None:
-    script = (
-        "#!/usr/bin/env python3\n"
+def _fake_codex_body(payload: dict) -> str:
+    return (
         "import json, sys\n"
         "if sys.argv[1] == '--version':\n"
         "    print('codex-cli 0.146.0-test')\n"
         "else:\n"
-        "    print('" + json.dumps(NATIVE_FIXTURE) + "')\n"
+        "    print('" + json.dumps(payload) + "')\n"
     )
-    bin_path.write_text(script)
-    bin_path.chmod(0o755)
 
 
 def _seed_native_capture(models: list[dict] | None = None) -> None:
@@ -69,9 +66,8 @@ def _seed_native_capture(models: list[dict] | None = None) -> None:
         )
 
 
-def test_capture_runs_fake_codex_and_writes_snapshot(tmp_path) -> None:
-    bin_path = tmp_path / "codex"
-    _write_fake_codex_bin(bin_path)
+def test_capture_runs_fake_codex_and_writes_snapshot(script_bin) -> None:
+    bin_path = script_bin("codex", _fake_codex_body(NATIVE_FIXTURE))
     with mock.patch.dict(os.environ, {native_models.CODEX_BIN_ENV: str(bin_path)}):
         snapshot = native_models.capture_native_models()
     assert [m["slug"] for m in snapshot["models"]] == ["gpt-5.6-luna", "gpt-5.6-terra"]
@@ -89,7 +85,7 @@ def test_capture_runs_fake_codex_and_writes_snapshot(tmp_path) -> None:
     assert "visibility" not in luna
 
 
-def test_capture_excludes_prefixed_and_opencode_go_slugs(tmp_path) -> None:
+def test_capture_excludes_prefixed_and_opencode_go_slugs(script_bin) -> None:
     # codex debug models renders the configured catalog: prefixed
     # opencode-go entries and bare opencode-go slugs (once the merged
     # catalog is configured) must never become "native".
@@ -101,25 +97,14 @@ def test_capture_excludes_prefixed_and_opencode_go_slugs(tmp_path) -> None:
             {"slug": "deepseek-v4-flash", "display_name": "Bare opencode-go"},
         ]
     }
-    bin_path = tmp_path / "codex"
-    script = (
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        "if sys.argv[1] == '--version':\n"
-        "    print('codex-cli 0.146.0-test')\n"
-        "else:\n"
-        "    print('" + json.dumps(polluted) + "')\n"
-    )
-    bin_path.write_text(script)
-    bin_path.chmod(0o755)
+    bin_path = script_bin("codex", _fake_codex_body(polluted))
     with mock.patch.dict(os.environ, {native_models.CODEX_BIN_ENV: str(bin_path)}):
         snapshot = native_models.capture_native_models()
     assert {m["slug"] for m in snapshot["models"]} == {"gpt-5.6-luna"}
 
 
-def test_dry_run_prints_and_does_not_write(tmp_path, capsys) -> None:
-    bin_path = tmp_path / "codex"
-    _write_fake_codex_bin(bin_path)
+def test_dry_run_prints_and_does_not_write(script_bin, capsys) -> None:
+    bin_path = script_bin("codex", _fake_codex_body(NATIVE_FIXTURE))
     with mock.patch.dict(os.environ, {native_models.CODEX_BIN_ENV: str(bin_path)}):
         rc = native_models.native_capture_cmd(["--dry-run"])
     assert rc == 0
@@ -129,9 +114,8 @@ def test_dry_run_prints_and_does_not_write(tmp_path, capsys) -> None:
     assert not os.path.exists(native_models.native_models_path())
 
 
-def test_capture_writes_and_prints_target(tmp_path, capsys) -> None:
-    bin_path = tmp_path / "codex"
-    _write_fake_codex_bin(bin_path)
+def test_capture_writes_and_prints_target(script_bin, capsys) -> None:
+    bin_path = script_bin("codex", _fake_codex_body(NATIVE_FIXTURE))
     with mock.patch.dict(os.environ, {native_models.CODEX_BIN_ENV: str(bin_path)}):
         rc = native_models.native_capture_cmd([])
     assert rc == 0

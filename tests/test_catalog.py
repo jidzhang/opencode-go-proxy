@@ -143,20 +143,27 @@ class MergedModelSlugsTests(unittest.TestCase):
     def test_memo_serves_cache_and_rereads_on_mtime_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "merged-models.json")
+            # Absolute, far-apart stamps: on Windows a rewrite does not
+            # refresh st_mtime_ns immediately (lazy metadata) and the
+            # filesystem rounds utime to 100ns, so a stamp derived from a
+            # post-write stat can collapse onto the previous value and never
+            # invalidate the memo. Only inequality matters to the memo, not
+            # the distance from "now".
+            first_stamp = 2_000_000_000_000_000_000
             with mock.patch("opencode_go_proxy.catalog.merged_models_path", return_value=path):
                 # Missing file: empty result, cached under mtime None.
                 self.assertEqual(merged_model_slugs(), [])
                 # A new file has a new mtime: re-read.
                 self._write_merged(path, ["a", "b"])
+                os.utime(path, ns=(first_stamp, first_stamp))
                 self.assertEqual(merged_model_slugs(), ["a", "b"])
                 # Same content rewritten at the SAME mtime: served from the
                 # cache (no re-read), so the poll stays a single stat.
-                st = os.stat(path)
                 self._write_merged(path, ["a", "b", "c"])
-                os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+                os.utime(path, ns=(first_stamp, first_stamp))
                 self.assertEqual(merged_model_slugs(), ["a", "b"])
                 # Touching the mtime invalidates the memo: re-read.
-                os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1))
+                os.utime(path, ns=(first_stamp + 10**9, first_stamp + 10**9))
                 self.assertEqual(merged_model_slugs(), ["a", "b", "c"])
                 # Removing the file flips mtime back to None: re-read to empty.
                 os.unlink(path)

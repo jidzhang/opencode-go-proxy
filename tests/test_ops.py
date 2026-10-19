@@ -282,7 +282,7 @@ class TestMask:
 
 
 class TestSupportBundle:
-    def test_bundle_json_schema_and_redaction(self, tmp_path) -> None:
+    def test_bundle_json_schema_and_redaction(self, tmp_path, assert_owner_only_mode) -> None:
         cfg = tmp_path / "config.toml"
         cfg.write_text(
             'openai_base_url = "http://127.0.0.1:8787/v1"\n'
@@ -318,7 +318,7 @@ class TestSupportBundle:
         assert data["logs"]["tail"]["opencode-go-proxy.err"]
         assert data["catalog"]["modelCount"] >= 2
         assert data["doctor"]["checks"]
-        assert (out.stat().st_mode & 0o777) == 0o600
+        assert_owner_only_mode(out)
 
     def test_default_output_path(self, tmp_path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)

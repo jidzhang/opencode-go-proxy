@@ -173,16 +173,21 @@ class ZenRouteTargetTests(unittest.TestCase):
             "shared_instructions": "",
             "models": [{"slug": "zen-only-test-model", "display_name": "Zen Only Test"}],
         }
+        # Absolute, far-apart stamps: on Windows a rewrite does not refresh
+        # st_mtime_ns immediately (lazy metadata), so a stamp derived from a
+        # post-write stat can collapse onto the previous value and never
+        # invalidate the mtime cache.
+        stamp = 2_000_000_000_000_000_000
         with open(path, "w") as handle:
             json.dump(compact, handle)
-        os.utime(path, ns=(os.stat(path).st_mtime_ns + 10**9, os.stat(path).st_mtime_ns + 10**9))
+        os.utime(path, ns=(stamp, stamp))
         # Same path, newer content: the mtime cache must re-read the go set.
         self.assertEqual(route_target("zen-only-test-model"), "opencode_go")
 
         compact["models"] = []
         with open(path, "w") as handle:
             json.dump(compact, handle)
-        os.utime(path, ns=(os.stat(path).st_mtime_ns + 10**9, os.stat(path).st_mtime_ns + 10**9))
+        os.utime(path, ns=(stamp + 10**9, stamp + 10**9))
         self.assertEqual(route_target("zen-only-test-model"), "zen")
 
     def test_opencode_go_prefix_wins_over_zen(self) -> None:

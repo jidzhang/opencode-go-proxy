@@ -61,8 +61,7 @@ FAKE_PROMPT_INPUT = {
     ]
 }
 
-FAKE_BIN = f"""#!/usr/bin/env python3
-import json
+FAKE_BIN = f"""import json
 import os
 import sys
 
@@ -80,11 +79,8 @@ else:
 
 
 @pytest.fixture
-def fake_codex_bin(tmp_path) -> str:
-    path = tmp_path / "fake-codex"
-    path.write_text(FAKE_BIN)
-    path.chmod(0o755)
-    return str(path)
+def fake_codex_bin(script_bin) -> str:
+    return script_bin("fake-codex", FAKE_BIN)
 
 
 def snapshot_names(tools=None) -> set[str]:
