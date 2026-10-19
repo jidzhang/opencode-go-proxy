@@ -111,14 +111,11 @@ class TestTtlCache:
         assert first.latest == _NEWER
         assert second.latest == "0.4.1"
 
-    def test_cache_file_mode_0600_under_state_dir(self) -> None:
-        import stat
-
+    def test_cache_file_mode_0600_under_state_dir(self, assert_owner_only_mode) -> None:
         with mock.patch(_urlopen_path(), return_value=_release(_NEWER_TAG)):
             updates.check_for_updates(force=True)
         assert updates._cache_path().endswith("update-check.json")
-        mode = os.stat(updates._cache_path()).st_mode & 0o777
-        assert mode == stat.S_IRUSR | stat.S_IWUSR
+        assert_owner_only_mode(updates._cache_path())
 
 
 class TestErrorPaths:

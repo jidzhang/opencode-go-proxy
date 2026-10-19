@@ -253,6 +253,11 @@ class TestRuntimeRefresh:
             )
         with mock.patch("opencode_go_proxy.catalog.discover_models", return_value=([], None)):
             catalog.refresh_runtime_catalog()
+        # Windows: a rewrite does not refresh st_mtime_ns immediately (lazy
+        # metadata), which would keep the mtime memo serving the pre-refresh
+        # set. Force a fresh absolute stamp so the change is always visible.
+        stamp = 2_000_000_000_000_000_000
+        os.utime(catalog.default_catalog_path(), ns=(stamp, stamp))
 
         # No explicit reload call: the mtime cache must pick the change up.
         after = set(protocol.known_models())

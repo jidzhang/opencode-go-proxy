@@ -10,6 +10,7 @@ file (~/.codex/model-catalogs/opencode-go.json).
 """
 import json
 import os
+import sys
 
 import pytest
 
@@ -79,3 +80,51 @@ def isolated_caption_cache() -> None:
     yield
     vision.CAPTION_CACHE.clear()
     vision.clear_local_probe_cache()
+
+
+@pytest.fixture
+def script_bin(tmp_path):
+    """Write a fake executable for the ``OPENCODE_GO_PROXY_CODEX_BIN``-style env vars.
+
+    The body is a plain python script (no shebang). On POSIX it is written
+    with a python3 shebang and the exec bit; CreateProcess cannot exec
+    shebang scripts (WinError 193), so on Windows the same body lands in
+    ``<name>.py`` next to a ``<name>.bat`` cmd wrapper that forwards all
+    arguments and stdin to the interpreter. Returns the path to set in the
+    env var. tmp_path is per-test; keep names distinct within one test.
+    """
+    def _make(name: str, body: str) -> str:
+        py = tmp_path / f"{name}.py"
+        py.write_text(body, encoding="utf-8", newline="\n")
+        if sys.platform == "win32":
+            bat = tmp_path / f"{name}.bat"
+            bat.write_text(f'@echo off\r\n"{sys.executable}" "{py}" %*\r\n', encoding="ascii", newline="")
+            return str(bat)
+        script = tmp_path / name
+        script.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8", newline="\n")
+        script.chmod(0o755)
+        return str(script)
+
+    return _make
+
+
+@pytest.fixture
+def fake_codex_bin(script_bin, monkeypatch) -> str:
+    """Point OPENCODE_GO_PROXY_CODEX_BIN at a binary that accepts multi_agent_v2."""
+    path = script_bin("codex", "raise SystemExit(0)\n")
+    monkeypatch.setenv("OPENCODE_GO_PROXY_CODEX_BIN", path)
+    return path
+
+
+@pytest.fixture
+def assert_owner_only_mode():
+    """Assert a file carries POSIX owner-only (0600) bits.
+
+    Windows has no chmod-enforced file mode, so the check is a no-op there.
+    """
+    def _check(path) -> None:
+        if sys.platform != "win32":
+            mode = os.stat(path).st_mode & 0o777
+            assert mode == 0o600, f"expected 0600, got {mode:#o}"
+
+    return _check
