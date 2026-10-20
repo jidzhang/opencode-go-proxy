@@ -337,12 +337,12 @@ class TestInstall:
 class TestPlatformServiceContract:
     def test_systemd_runs_one_pinned_truthful_proxy(self) -> None:
         root = Path(__file__).parents[1]
-        version = tomllib.loads((root / "pyproject.toml").read_text())["project"][
-            "version"
-        ]
+        version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
+            "project"
+        ]["version"]
         service = (
             root / "contrib/systemd/opencode-go-proxy.service"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         exec_lines = [
             line for line in service.splitlines() if line.startswith("ExecStart=")
         ]
@@ -353,13 +353,13 @@ class TestPlatformServiceContract:
 
     def test_menu_bar_pin_matches_package_version(self) -> None:
         root = Path(__file__).parents[1]
-        version = tomllib.loads((root / "pyproject.toml").read_text())["project"][
-            "version"
-        ]
+        version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
+            "project"
+        ]["version"]
         controller = (
             root
             / "macos/MenuBarApp/Sources/OpenCodeGoMenuBar/ProxyController.swift"
-        ).read_text()
+        ).read_text(encoding="utf-8")
         assert f"opencode-go-proxy@v{version}" in controller
         assert not (root / "contrib/launchd").exists()
 
