@@ -83,6 +83,13 @@ def fake_codex_bin(script_bin) -> str:
     return script_bin("fake-codex", FAKE_BIN)
 
 
+def test_resolve_codex_bin_falls_back_to_path(script_bin, monkeypatch) -> None:
+    bin_path = script_bin("codex", "raise SystemExit(0)\n")
+    monkeypatch.delenv(codex_tools.CODEX_BIN_ENV, raising=False)
+    monkeypatch.setenv("PATH", os.path.dirname(bin_path))
+    assert os.path.samefile(codex_tools._resolve_codex_bin(), bin_path)
+
+
 def snapshot_names(tools=None) -> set[str]:
     tools = load_snapshot_tools() if tools is None else tools
     names: set[str] = set()

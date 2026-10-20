@@ -99,6 +99,10 @@
 - Trace `upstream.pool` counters (fresh/reused/idle) every
   `OPENCODE_GO_PROXY_POOL_REPORT_EVERY` opens (default 100) so keep-alive
   savings are observable from the logs.
+- Codex CLI discovery now searches `PATH` after the explicit
+  `OPENCODE_GO_PROXY_CODEX_BIN` override and before the standalone/app-bundle
+  fallbacks, so npm and Homebrew installs are found by native-model and
+  codex-app-tool capture instead of logging `codex CLI not found`.
 
 ### Added
 

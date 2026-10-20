@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,10 +48,17 @@ def native_models_path() -> str:
 
 
 def resolve_codex_bin() -> str:
-    """Codex CLI path: env override, then standalone install, then app bundle."""
+    """Codex CLI path: env override, then PATH, then known install locations.
+
+    PATH comes before the hardcoded installs so npm/Homebrew/standalone
+    installs all resolve the same way the user invokes ``codex``.
+    """
     env = os.environ.get(CODEX_BIN_ENV)
     if env:
         return env
+    found = shutil.which("codex")
+    if found:
+        return found
     candidates = (
         os.path.join(
             os.path.expanduser("~"), ".codex", "packages", "standalone", "current", "bin", "codex"
