@@ -26,7 +26,7 @@ from .upstream import (
     retriable_http_failure,
     retry_sleep,
 )
-from .upstream_headers import upstream_user_agent
+from .upstream_headers import base_upstream_headers
 from .zen_upstream import (
     ANTHROPIC_VERSION,
     _relay_upstream_error,
@@ -153,9 +153,7 @@ def _handle_go_verbatim_request(
     body["model"] = bare_id
     raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
     headers = {
-        "content-type": "application/json",
-        "accept": "text/event-stream" if payload.get("stream") is True else "application/json",
-        "user-agent": upstream_user_agent(),
+        **base_upstream_headers(),
         **opencode_session_headers(handler.headers, payload),
         **auth_headers,
     }

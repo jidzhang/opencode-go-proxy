@@ -43,13 +43,13 @@ from .quota import record_quota_from_headers
 from .secrets import resolve_api_key
 from .trace import _mask_trace_body, trace
 from .upstream import (
+    _chat_request,
     default_max_retries,
     record_cache,
     retriable_http_failure,
     retry_sleep,
     usage_tokens,
 )
-from .upstream_headers import upstream_user_agent
 from .vision import caption_images_in_messages, is_image_rejection_status
 
 Json = dict[str, Any]
@@ -342,11 +342,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
         raw_payload = json.dumps(chat_payload, separators=(",",":")).encode("utf-8")
 
         def _make_req() -> urllib.request.Request:
-            return urllib.request.Request(url, data=raw_payload, headers={
-                "authorization": f"Bearer {api_key}", "content-type": "application/json",
-                "accept": "text/event-stream",
-                "user-agent": upstream_user_agent(),
-            }, method="POST")
+            return _chat_request(url, api_key, raw_payload)
 
         req = _make_req()
         trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), stream=True)
@@ -776,11 +772,7 @@ def handle_chat_stream_passthrough(payload: Json, config: ProxyConfig, request_i
     api_key = resolve_api_key(config, request_id)
     url = f"{config.chat_base_url}/chat/completions"
     raw_payload = json.dumps(payload, separators=(",",":")).encode("utf-8")
-    req = urllib.request.Request(url, data=raw_payload, headers={
-        "authorization": f"Bearer {api_key}", "content-type": "application/json",
-        "accept": "text/event-stream",
-        "user-agent": upstream_user_agent(),
-    }, method="POST")
+    req = _chat_request(url, api_key, raw_payload)
     trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), stream=True)
 
     try:

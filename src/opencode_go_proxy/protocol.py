@@ -807,6 +807,40 @@ def drop_reasoning_items(payload: Json) -> tuple[Json, int]:
     return cleaned, dropped
 
 
+# Canonical Anthropic effort <-> extended-thinking budget ladder, ascending by
+# budget. The forward map (Responses effort -> budget for the zen anthropic
+# family, in zen_upstream) and the inverse map (caller budget_tokens -> coarse
+# effort, in anthropic_client) are both derived from this one table: an
+# anthropic_to_responses -> responses_payload_to_anthropic round trip runs the
+# same budget through both directions, so the two cannot be tuned apart.
+ANTHROPIC_THINKING_LEVELS: tuple[tuple[str, int], ...] = (
+    ("low", 4000),
+    ("medium", 10000),
+    ("high", 20000),
+    ("xhigh", 32000),
+)
+
+
+def extract_reasoning_effort(payload: Json, nested_key: str = "reasoning") -> str | None:
+    """Return the Responses reasoning effort, if the caller set one.
+
+    Codex sends ``reasoning: {"effort": "xhigh", ...}``; some clients send the
+    Chat-style flat ``reasoning_effort`` instead. Either shape is accepted and
+    forwarded verbatim (the upstream validates the value). ``nested_key``
+    exists because the Anthropic ingress spells the nested field
+    ``output_config.effort``.
+    """
+    nested = payload.get(nested_key)
+    if isinstance(nested, dict):
+        effort = nested.get("effort")
+        if isinstance(effort, str) and effort.strip():
+            return effort.strip()
+    flat = payload.get("reasoning_effort")
+    if isinstance(flat, str) and flat.strip():
+        return flat.strip()
+    return None
+
+
 def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
     messages, message_stats = responses_input_to_chat_messages(payload)
     tools, tool_stats = responses_tools_to_chat_tools(payload.get("tools"))
@@ -855,6 +889,10 @@ def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
         chat_payload["top_p"] = payload["top_p"]
     if payload.get("max_output_tokens") is not None:
         chat_payload["max_tokens"] = payload["max_output_tokens"]
+
+    effort = extract_reasoning_effort(payload)
+    if effort is not None:
+        chat_payload["reasoning_effort"] = effort
 
     stats: Json = {
         "messages": message_stats,

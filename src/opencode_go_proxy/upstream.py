@@ -24,7 +24,7 @@ from .protocol import cache_stats_from_usage
 from .quota import record_quota_from_headers
 from .secrets import resolve_api_key
 from .trace import _mask_trace_body, trace
-from .upstream_headers import upstream_user_agent
+from .upstream_headers import base_upstream_headers
 
 Json = dict[str, Any]
 
@@ -144,7 +144,6 @@ def _chat_request(
     url: str,
     api_key: str,
     raw_payload: bytes,
-    accept: str,
     session_headers: dict[str, str] | None = None,
 ) -> urllib.request.Request:
     """Build the one upstream chat-completions request shape both clients share.
@@ -153,12 +152,8 @@ def _chat_request(
     the Go gateway expects; sub-calls without it (image captioning) are
     rejected with ``MissingSessionID`` and burn their retry budget.
     """
-    headers = {
-        "authorization": f"Bearer {api_key}",
-        "content-type": "application/json",
-        "accept": accept,
-        "user-agent": upstream_user_agent(),
-    }
+    headers = base_upstream_headers()
+    headers["authorization"] = f"Bearer {api_key}"
     if session_headers:
         headers.update(session_headers)
     return urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
@@ -173,7 +168,7 @@ def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str,
     retries = 0
     while True:
         request = _chat_request(
-            url, api_key, raw_payload, "application/json",
+            url, api_key, raw_payload,
             session_headers=opencode_session_headers(None, chat_payload),
         )
         trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
@@ -279,7 +274,7 @@ def call_upstream_chat_verbatim(
     retries = 0
     while True:
         request = _chat_request(
-            url, api_key, raw_payload, "application/json",
+            url, api_key, raw_payload,
             session_headers=opencode_session_headers(None, chat_payload),
         )
         trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)

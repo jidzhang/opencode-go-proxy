@@ -44,9 +44,11 @@ from .go_upstream import (
 from .meter import BYTES_PER_TOKEN_ESTIMATE, record_usage_event
 from .opencode_session import opencode_session_headers
 from .protocol import (
+    ANTHROPIC_THINKING_LEVELS,
     DEFAULT_MODEL,
     _as_int,
     drop_dangling_function_calls,
+    extract_reasoning_effort,
     new_response_id,
 )
 from .streaming import KeepaliveWriter, _ConnectFailed, _open_upstream_stream
@@ -199,6 +201,36 @@ def _translate_tool_choice(choice: Any) -> Any:
             if isinstance(name, str) and name:
                 return {"type": "function", "name": name}
     return None
+
+
+def _anthropic_thinking_to_effort(payload: Json) -> str | None:
+    """Map a Claude thinking config to a Responses reasoning effort.
+
+    Claude Code sends ``thinking: {"type": "enabled", "budget_tokens": N}``;
+    newer clients may send ``output_config: {"effort": ...}`` or a flat
+    ``reasoning_effort``. The budget map is coarse (low/medium/high/xhigh)
+    but keeps an explicit caller level explicit downstream instead of
+    silently dropping to the upstream default.
+    """
+    effort = extract_reasoning_effort(payload, nested_key="output_config")
+    if effort is not None:
+        return effort
+    thinking = payload.get("thinking")
+    if not isinstance(thinking, dict):
+        return None
+    if thinking.get("type") != "enabled":
+        return None
+    budget = thinking.get("budget_tokens")
+    # bool is an int subclass: a JSON true/false budget is malformed input and
+    # must take the coarse "medium" fallback, not compare as 1/0.
+    if type(budget) is not int:
+        return "medium"
+    # Exact inverse of the ANTHROPIC_THINKING_LEVELS forward map: the first
+    # level whose budget covers the caller's value.
+    for level, bound in ANTHROPIC_THINKING_LEVELS:
+        if budget <= bound:
+            return level
+    return ANTHROPIC_THINKING_LEVELS[-1][0]
 
 
 def anthropic_to_responses_payload(payload: Json) -> tuple[Json, Json]:
@@ -354,6 +386,9 @@ def anthropic_to_responses_payload(payload: Json) -> tuple[Json, Json]:
         out["temperature"] = payload["temperature"]
     if payload.get("top_p") is not None:
         out["top_p"] = payload["top_p"]
+    effort = _anthropic_thinking_to_effort(payload)
+    if effort is not None:
+        out["reasoning"] = {"effort": effort}
     return out, stats
 
 
