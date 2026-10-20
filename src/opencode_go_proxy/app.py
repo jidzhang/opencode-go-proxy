@@ -9,9 +9,9 @@ from __future__ import annotations
 import argparse
 import gzip
 import io
-import select
 import json
 import os
+import select
 import signal
 import socket
 import sys

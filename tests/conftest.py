@@ -91,16 +91,20 @@ def script_bin(tmp_path):
     shebang scripts (WinError 193), so on Windows the same body lands in
     ``<name>.py`` next to a ``<name>.bat`` cmd wrapper that forwards all
     arguments and stdin to the interpreter. Returns the path to set in the
-    env var. tmp_path is per-test; keep names distinct within one test.
+    env var. Scripts live in a dedicated subdirectory so their names cannot
+    collide with files or directories a test creates in tmp_path (e.g. a
+    test using ``tmp_path / "codex"`` as a config directory).
     """
     def _make(name: str, body: str) -> str:
-        py = tmp_path / f"{name}.py"
+        bin_dir = tmp_path / "fake-bin"
+        bin_dir.mkdir(exist_ok=True)
+        py = bin_dir / f"{name}.py"
         py.write_text(body, encoding="utf-8", newline="\n")
         if sys.platform == "win32":
-            bat = tmp_path / f"{name}.bat"
+            bat = bin_dir / f"{name}.bat"
             bat.write_text(f'@echo off\r\n"{sys.executable}" "{py}" %*\r\n', encoding="ascii", newline="")
             return str(bat)
-        script = tmp_path / name
+        script = bin_dir / name
         script.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8", newline="\n")
         script.chmod(0o755)
         return str(script)
