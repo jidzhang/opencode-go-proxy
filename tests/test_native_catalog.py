@@ -52,6 +52,21 @@ def _fake_codex_body(payload: dict) -> str:
     )
 
 
+def test_resolve_codex_bin_falls_back_to_path(script_bin, monkeypatch) -> None:
+    bin_path = script_bin("codex", "raise SystemExit(0)\n")
+    monkeypatch.delenv(native_models.CODEX_BIN_ENV, raising=False)
+    monkeypatch.setenv("PATH", os.path.dirname(bin_path))
+    assert os.path.samefile(native_models.resolve_codex_bin(), bin_path)
+
+
+def test_resolve_codex_bin_env_override_wins(script_bin, monkeypatch) -> None:
+    on_path = script_bin("codex", "raise SystemExit(0)\n")
+    override = script_bin("override-codex", "raise SystemExit(0)\n")
+    monkeypatch.setenv(native_models.CODEX_BIN_ENV, override)
+    monkeypatch.setenv("PATH", os.path.dirname(on_path))
+    assert native_models.resolve_codex_bin() == override
+
+
 def _seed_native_capture(models: list[dict] | None = None) -> None:
     state = state_dir()
     os.makedirs(state, exist_ok=True)

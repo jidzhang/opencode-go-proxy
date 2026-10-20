@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -164,10 +165,13 @@ CODEX_FALLBACK_PATHS = (
 
 
 def _resolve_codex_bin() -> str | None:
-    """Codex CLI path: env override, then standalone install, then app bundle."""
+    """Codex CLI path: env override, then PATH, then known install locations."""
     env = os.environ.get(CODEX_BIN_ENV)
     if env:
         return env
+    found = shutil.which("codex")
+    if found:
+        return found
     for candidate in CODEX_FALLBACK_PATHS:
         if os.path.exists(candidate):
             return candidate
