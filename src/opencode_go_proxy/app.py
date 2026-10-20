@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import io
+import select
 import json
 import os
 import signal
@@ -205,7 +206,21 @@ def _maybe_dump_request(path: str, request_id: str, payload: Json) -> None:
         pass
 
 
+# Upper bound on how much unread request body an error response drains before
+# the connection closes; past this the client is hostile or oversized anyway.
+_ERROR_BODY_DRAIN_CAP = 1024 * 1024
+# How long the drain waits for body bytes still in flight before giving up:
+# clients send headers and body as separate writes, so the body can lag the
+# guard decision by a scheduling beat, but a declared-and-never-sent remainder
+# (oversized-body rejection) must be answered, not waited for.
+_ERROR_BODY_DRAIN_WAIT_SEC = 0.05
+
+
 class ResponsesProxyHandler(BaseHTTPRequestHandler):
+    # How much of the declared request body has been consumed; reset per
+    # request so the error-path drain knows what is still unread.
+    _body_bytes_read = 0
+
     def _guard_request(self) -> None:
         """Enforce the local or explicitly authenticated remote boundary."""
         check_host(self.headers.get("Host"))
@@ -216,6 +231,35 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
     def _error_payload(exc: ProxyError) -> Json:
         return {"error": {"type": exc.error_type or "proxy_error", "message": exc.message}}
 
+    def _drain_request_body(self) -> None:
+        """Consume request bytes already received so the close is a clean FIN.
+
+        Writing an error while unread body bytes sit in the kernel receive
+        buffer turns the close into an RST, and on Windows that RST can
+        discard the already-queued response before the client reads it
+        (observed as WinError 10053 instead of the status code). Drain only
+        what has actually arrived — never waiting for a declared-but-unsent
+        remainder (an oversized-body rejection must answer immediately), and
+        stop as soon as no more data is instantly available. Bytes already
+        buffered in ``rfile`` are already off the kernel buffer and cannot
+        trigger the RST, so reading the socket directly is sufficient.
+        """
+        try:
+            declared = int(self.headers.get("content-length", "0"))
+        except ValueError:
+            return
+        remaining = min(max(declared - self._body_bytes_read, 0), _ERROR_BODY_DRAIN_CAP)
+        try:
+            while remaining > 0:
+                if not select.select([self.request], [], [], _ERROR_BODY_DRAIN_WAIT_SEC)[0]:
+                    return
+                chunk = self.request.recv(min(remaining, 65536))
+                if not chunk:
+                    return
+                remaining -= len(chunk)
+        except OSError:
+            return
+
     def _send_proxy_error(self, exc: ProxyError, *, payload: Json | None = None) -> None:
         """Write the proxy error envelope, forwarding upstream retry-after.
 
@@ -224,6 +268,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         replaces the default envelope body (the /v1/messages surface speaks
         the Anthropic error shape).
         """
+        self._drain_request_body()
         headers = None
         if exc.headers and exc.headers.get("retry-after"):
             headers = {"retry-after": exc.headers["retry-after"]}
@@ -321,6 +366,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         request_id = uuid.uuid4().hex[:12]
+        self._body_bytes_read = 0
         # The Codex app may send ?compact=true on the responses path; the query
         # string must not turn a known path into a 404. The payload translates
         # through the normal path either way (compact is just a hint).
@@ -332,6 +378,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         try:
             self._guard_request()
             if path not in _KNOWN_POST_PATHS:
+                self._drain_request_body()
                 self._send_json({"error": {"message": "not found"}}, status=HTTPStatus.NOT_FOUND)
                 return
             check_content_type(self.headers.get("content-type"))
@@ -415,6 +462,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         if length > config.max_body_bytes:
             raise ProxyError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"request body exceeds {config.max_body_bytes // (1024*1024)}MB cap")
         raw = self.rfile.read(length)
+        self._body_bytes_read = len(raw)
         if not raw:
             return {}
         body = decode_request_body(raw, self.headers.get("content-encoding", ""), config.max_body_bytes)

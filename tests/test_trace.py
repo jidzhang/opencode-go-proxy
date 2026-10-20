@@ -28,11 +28,19 @@ def _drain(q) -> list:
 
 @pytest.fixture
 def quiet_queue():
-    """Freeze the writer and hand each test an empty, inspectable queue."""
-    with mock.patch.object(trace_mod, "_ensure_writer"):
-        _drain(trace_mod._queue)
+    """Hand each test a private queue the trace writer cannot touch.
+
+    ``_ensure_writer`` is mocked so these tests never START the writer. When
+    an earlier test (the in-process HTTP suites) already started it, that
+    thread stays blocked in ``get()`` on the ORIGINAL queue object, so it can
+    never steal records from the swapped-in private queue: what trace()
+    enqueued here is exactly what the test drains. Patching restores the
+    real queue afterwards and the writer resumes on it untouched.
+    """
+    with mock.patch.object(trace_mod, "_ensure_writer"), mock.patch.object(
+        trace_mod, "_queue", queue.Queue()
+    ):
         yield trace_mod._queue
-        _drain(trace_mod._queue)
 
 
 def _events(q) -> list[tuple[str, str]]:
