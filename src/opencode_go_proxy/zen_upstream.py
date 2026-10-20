@@ -54,9 +54,11 @@ from .protocol import (
     now_unix,
     responses_input_to_chat_messages,
     responses_payload_to_chat_payload,
+    ANTHROPIC_THINKING_LEVELS,
     responses_tools_to_chat_tools,
     drop_dangling_function_calls,
     env_flag,
+    extract_reasoning_effort,
     maybe_detox_payload,
     responses_tools_to_function_tools,
     restore_namespaced_function_calls,
@@ -79,7 +81,7 @@ from .upstream import (
     retry_sleep,
     usage_tokens,
 )
-from .upstream_headers import upstream_user_agent
+from .upstream_headers import base_upstream_headers
 from .vision import caption_images_in_messages
 from .zen_catalog import ZEN_PREFIX, resolve_family, zen_families, zen_model_ids
 
@@ -96,6 +98,28 @@ GO_GOOGLE_BASE_URL_ENV = "OPENCODE_GO_GOOGLE_BASE_URL"
 ZEN_PROVIDER = "zen"
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_ANTHROPIC_MAX_TOKENS = 8192
+
+# Reasoning-effort level -> extended-thinking budget per upstream family.
+# Anthropic counts thinking tokens inside max_tokens and requires
+# budget_tokens < max_tokens (min 1024); Gemini rejects thinkingBudget above
+# the model cap, and 2.5 Flash tops out at 24576, so "xhigh" is the largest
+# value every Gemini 2.5 model accepts. Levels absent from the map (including
+# "none") leave the thinking config off entirely: Anthropic disables thinking
+# by omission, and Gemini-class Pro models cannot disable thinking, so no
+# "off" budget is universally safe to send. The Anthropic budgets are the
+# canonical ANTHROPIC_THINKING_LEVELS ladder (see protocol.py); "minimal" is
+# an alias of "low".
+ANTHROPIC_THINKING_BUDGETS: Final[dict[str, int]] = {
+    **dict(ANTHROPIC_THINKING_LEVELS),
+    "minimal": ANTHROPIC_THINKING_LEVELS[0][1],
+}
+GEMINI_THINKING_BUDGETS: Final[dict[str, int]] = {
+    "low": 4000,
+    "minimal": 4000,
+    "medium": 8000,
+    "high": 16000,
+    "xhigh": 24576,
+}
 
 # The four zen wire families; anything else is a catalog bug and must not be
 # forwarded to an endpoint that will reject it.
@@ -178,22 +202,18 @@ def _family_headers(
     family: str,
     api_key: str,
     *,
-    stream: bool,
     extra_headers: Mapping[str, str] | None = None,
     google_auth: str = "key",
 ) -> dict[str, str]:
-    """Per-family auth, identity, affinity, and accept headers.
+    """Per-family auth, identity, and affinity headers.
 
     ``google_auth="bearer"`` sends the google family with an Authorization
     Bearer header (the Go google endpoint); the default ``"key"`` keeps the
-    ``x-goog-api-key`` header (Zen).
+    ``x-goog-api-key`` header (Zen). The shared content-type/accept/user-agent
+    triple comes from ``base_upstream_headers``; see ``UPSTREAM_ACCEPT`` for
+    why accept is always ``*/*``.
     """
-    accept = "text/event-stream" if stream else "application/json"
-    headers = {
-        "content-type": "application/json",
-        "accept": accept,
-        "user-agent": upstream_user_agent(),
-    }
+    headers = base_upstream_headers()
     headers.update(extra_headers or {})
     if family == "anthropic_messages":
         headers["x-api-key"] = api_key
@@ -206,11 +226,6 @@ def _family_headers(
     else:
         headers["authorization"] = f"Bearer {api_key}"
     return headers
-
-
-def _zen_headers(family: str, api_key: str, *, stream: bool) -> dict[str, str]:
-    """Per-family auth and accept headers."""
-    return _family_headers(family, api_key, stream=stream)
 
 
 def parse_zen_error(body: str) -> tuple[str | None, str | None]:
@@ -283,7 +298,7 @@ def _build_family_request(
                         working["tool_choice"] = {"type": "function", "name": name}
         url = _family_endpoint(base_url, family, bare_id, stream=stream)
         return url, working, _family_headers(
-            family, api_key, stream=stream, extra_headers=extra_headers
+            family, api_key, extra_headers=extra_headers
         )
 
     if family == "openai_chat":
@@ -314,7 +329,7 @@ def _build_family_request(
             chat_payload["stream"] = False
         url = _family_endpoint(base_url, family, bare_id, stream=stream)
         return url, chat_payload, _family_headers(
-            family, api_key, stream=stream, extra_headers=extra_headers
+            family, api_key, extra_headers=extra_headers
         )
 
     if family == "anthropic_messages":
@@ -325,14 +340,14 @@ def _build_family_request(
         body["stream"] = stream
         url = _family_endpoint(base_url, family, bare_id, stream=stream)
         return url, body, _family_headers(
-            family, api_key, stream=stream, extra_headers=extra_headers
+            family, api_key, extra_headers=extra_headers
         )
 
     working = inject_session_model(dict(payload), session_model)
     body = responses_payload_to_gemini_payload(working)
     url = _family_endpoint(base_url, family, bare_id, stream=stream)
     headers = _family_headers(
-        family, api_key, stream=stream, extra_headers=extra_headers, google_auth=google_auth
+        family, api_key, extra_headers=extra_headers, google_auth=google_auth
     )
     if request_id is not None:
         trace("request.gemini_payload_debug", level="debug", request_id=request_id, **gemini_payload_debug(body))
@@ -644,7 +659,28 @@ def responses_payload_to_anthropic_payload(payload: Json) -> Json:
         body["system"] = system_parts
     max_tokens = payload.get("max_output_tokens")
     body["max_tokens"] = max_tokens if isinstance(max_tokens, int) and max_tokens > 0 else DEFAULT_ANTHROPIC_MAX_TOKENS
-    if payload.get("temperature") is not None:
+    # Extended thinking requires the final assistant turn to start with a
+    # thinking block whenever the request hands tool results back; the
+    # Responses-shaped history carries no thinking blocks to replay, so a
+    # mid-loop turn would be rejected outright. Serve those turns without
+    # thinking instead of failing the whole tool round-trip.
+    final_message = anthropic_messages[-1] if anthropic_messages else None
+    mid_tool_loop = isinstance(final_message, dict) and final_message.get("role") == "user" and any(
+        isinstance(block, dict) and block.get("type") == "tool_result"
+        for block in final_message.get("content") or []
+    )
+    effort = extract_reasoning_effort(payload)
+    budget = None if mid_tool_loop else ANTHROPIC_THINKING_BUDGETS.get(effort)
+    if budget is not None:
+        # Anthropic requires budget_tokens < max_tokens (min 1024): raise the
+        # cap to make room rather than letting the gateway reject the whole
+        # turn because the caller's max_output_tokens only covered the answer.
+        body["max_tokens"] = max(int(body["max_tokens"]), budget + 1024)
+        body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    elif payload.get("temperature") is not None:
+        # Extended thinking replaces sampling controls upstream (temperature
+        # may only be 1 with thinking enabled), so temperature only rides
+        # along when thinking stays off.
         body["temperature"] = payload["temperature"]
     if tools:
         body["tools"] = [
@@ -657,7 +693,10 @@ def responses_payload_to_anthropic_payload(payload: Json) -> Json:
             if isinstance(tool, dict) and isinstance(tool.get("function"), dict)
         ]
         tool_choice = _anthropic_tool_choice(payload.get("tool_choice"))
-        if tool_choice is not None:
+        # Extended thinking locks tool_choice to auto/none upstream (and
+        # newer Claude models reject forced choices outright): fall back
+        # to auto rather than failing the turn.
+        if tool_choice is not None and (budget is None or tool_choice.get("type") == "none"):
             body["tool_choice"] = tool_choice
     return body
 
@@ -705,9 +744,9 @@ def _anthropic_user_blocks(content: Any) -> list[Json]:
 def _anthropic_tool_choice(choice: Any) -> Json | None:
     """Responses tool_choice to anthropic tool_choice; None means omit (auto)."""
     if isinstance(choice, str):
-        if choice == "required":
-            return {"type": "any"}
-        return None
+        # Normalize the string spelling into the dict shape so every verb is
+        # mapped in exactly one place below.
+        choice = {"type": choice}
     if not isinstance(choice, dict):
         return None
     choice_type = choice.get("type")
@@ -718,6 +757,8 @@ def _anthropic_tool_choice(choice: Any) -> Json | None:
         return {"type": "any"}
     if choice_type == "required":
         return {"type": "any"}
+    if choice_type == "none":
+        return {"type": "none"}
     return None
 
 
@@ -916,6 +957,10 @@ def responses_payload_to_gemini_payload(payload: Json) -> Json:
         generation_config["topP"] = payload["top_p"]
     if payload.get("max_output_tokens") is not None:
         generation_config["maxOutputTokens"] = payload["max_output_tokens"]
+    effort = extract_reasoning_effort(payload)
+    budget = GEMINI_THINKING_BUDGETS.get(effort)
+    if budget is not None:
+        generation_config["thinkingConfig"] = {"thinkingBudget": budget}
     if generation_config:
         body["generationConfig"] = generation_config
     return body
@@ -1057,7 +1102,9 @@ def _anthropic_content_to_fake(content: Any) -> tuple[Json, list[str]]:
         if not isinstance(block, dict):
             continue
         block_type = block.get("type")
-        if block_type in {"text", "thinking"}:
+        if block_type == "text":
+            # Thinking blocks are internal reasoning: never surfaced as
+            # response text (they carry their content under "thinking" anyway).
             text = block.get("text")
             if isinstance(text, str) and text:
                 text_parts.append(text)
@@ -2436,7 +2483,7 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
     body["model"] = bare_id
     url = _zen_endpoint("openai_chat", bare_id, stream=payload.get("stream") is True)
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    headers = _zen_headers("openai_chat", api_key, stream=payload.get("stream") is True)
+    headers = _family_headers("openai_chat", api_key)
 
     if payload.get("stream") is True:
         req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")

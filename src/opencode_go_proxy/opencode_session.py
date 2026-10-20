@@ -91,5 +91,16 @@ def opencode_session_headers(
     headers: Mapping[str, Any] | None,
     payload: dict[str, Any],
 ) -> dict[str, str]:
-    """Return the one stable affinity header OpenCode expects."""
-    return {OPENCODE_SESSION_HEADER: resolve_opencode_session(headers, payload)}
+    """Return the stable affinity headers OpenCode expects.
+
+    Always includes ``x-opencode-session`` (preserved or derived) and
+    ``x-opencode-client``. The client id is forwarded verbatim when the
+    downstream sends it (``cli`` from opencode/CLI, ``claude``/``codex``
+    from those CLIs); when absent it defaults to ``cli`` so the upstream
+    dashboard keeps the same client identity as a direct CLI connection
+    instead of a blank client.
+    """
+    return {
+        OPENCODE_SESSION_HEADER: resolve_opencode_session(headers, payload),
+        "x-opencode-client": _header(headers, "x-opencode-client") or "cli",
+    }
