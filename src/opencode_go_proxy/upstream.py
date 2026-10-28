@@ -35,18 +35,6 @@ Json = dict[str, Any]
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_BASE_SLEEP_MS = 150
 
-# Budget for one image-caption sub-call. Cached captions return instantly;
-# a miss gets 30s and no retries, and a slow/failed caption degrades to a
-# placeholder rather than crashing the turn.
-DEFAULT_CAPTION_TIMEOUT_SEC = 30.0
-
-
-def caption_timeout_sec() -> float:
-    try:
-        return max(1.0, float(os.environ.get("OPENCODE_GO_PROXY_CAPTION_TIMEOUT_SEC", str(DEFAULT_CAPTION_TIMEOUT_SEC))))
-    except ValueError:
-        return DEFAULT_CAPTION_TIMEOUT_SEC
-
 
 def default_max_retries() -> int:
     try:

@@ -134,7 +134,6 @@ def inject_session_model(payload: Json, session_model: str) -> Json:
     return dict(payload)
 
 DEFAULT_MODEL = "deepseek-v4-flash"
-IMAGE_MODEL_DEFAULT = "mimo-v2.5"
 
 
 def _catalog_mtime() -> tuple[str, int | None]:
@@ -148,14 +147,14 @@ def _catalog_mtime() -> tuple[str, int | None]:
         return path, None
 
 
-# One mtime-keyed parse serves all three catalog views below: known slugs,
-# context windows, and image-capable slugs. The full-shape catalog file is
-# only read once per change instead of once per view.
-_CATALOG_CACHE: tuple[str, int | None, set[str], dict[str, int], set[str]] | None = None
+# One mtime-keyed parse serves the catalog views below: known slugs and
+# context windows. The full-shape catalog file is only read once per change
+# instead of once per view.
+_CATALOG_CACHE: tuple[str, int | None, set[str], dict[str, int]] | None = None
 
 
-def _catalog_views() -> tuple[str, int | None, set[str], dict[str, int], set[str]]:
-    """Parse the catalog once, cached by file mtime; (path, mtime, slugs, windows, image_slugs)."""
+def _catalog_views() -> tuple[str, int | None, set[str], dict[str, int]]:
+    """Parse the catalog once, cached by file mtime; (path, mtime, slugs, windows)."""
     global _CATALOG_CACHE
 
     path, mtime = _catalog_mtime()
@@ -167,7 +166,6 @@ def _catalog_views() -> tuple[str, int | None, set[str], dict[str, int], set[str
         return _CATALOG_CACHE
     slugs: set[str] = set()
     windows: dict[str, int] = {}
-    image_slugs: set[str] = set()
     try:
         with open(path) as handle:
             catalog = json.load(handle)
@@ -180,14 +178,9 @@ def _catalog_views() -> tuple[str, int | None, set[str], dict[str, int], set[str
                 context = entry.get("context_window")
                 if isinstance(context, int) and context > 0:
                     windows[slug] = context
-                modalities = entry.get("input_modalities")
-                if isinstance(modalities, list) and "image" in modalities:
-                    image_slugs.add(slug)
-                    if slug.startswith("opencode-go/"):
-                        image_slugs.add(normalize_model_slug(slug))
     except (OSError, json.JSONDecodeError):
         pass
-    _CATALOG_CACHE = (path, mtime, slugs, windows, image_slugs)
+    _CATALOG_CACHE = (path, mtime, slugs, windows)
     return _CATALOG_CACHE
 
 
@@ -218,15 +211,6 @@ def model_context_window(model: str) -> int | None:
     windows = _catalog_views()[3]
     return windows.get(model) or windows.get(f"opencode-go/{normalize_model_slug(model)}")
 
-
-def image_capable_models() -> set[str]:
-    """Return catalog slugs whose record declares image input, cached by mtime.
-
-    Mirrors known_models(): a rewritten catalog file makes the next call
-    re-read. Used to keep image turns on the requested model when it can
-    actually accept images, instead of always forcing the image default.
-    """
-    return _catalog_views()[4]
 
 
 def new_response_id() -> str:
@@ -847,11 +831,6 @@ def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
 
     incoming_model = payload.get("model", DEFAULT_MODEL)
     # Detect images by scanning for actual image_url parts (not just list-shaped content).
-    has_image = any(
-        isinstance(m.get("content"), list)
-        and any(isinstance(p, dict) and p.get("type") == "image_url" for p in m["content"])
-        for m in messages
-    )
     # Dispatch relays native slugs to the passthrough before translation; if
     # one arrives here anyway, its model is never rewritten. For opencode-go
     # targets the prefixed slug is checked against the catalog by its bare
@@ -860,16 +839,7 @@ def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
     if route_target(incoming_model) == "native":
         upstream_model = incoming_model
     else:
-        bare = normalize_model_slug(incoming_model)
-        if has_image:
-            if bare in image_capable_models():
-                upstream_model = bare
-            else:
-                upstream_model = (
-                    os.environ.get("CODEX_IMAGE_MODEL", IMAGE_MODEL_DEFAULT) or IMAGE_MODEL_DEFAULT
-                )
-        else:
-            upstream_model = bare
+        upstream_model = normalize_model_slug(incoming_model)
 
     chat_payload: Json = {
         "model": upstream_model,
@@ -898,7 +868,6 @@ def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
         "messages": message_stats,
         "tools": tool_stats,
         "upstream_model": upstream_model,
-        "has_image": has_image,
         "tools_present": tools is not None,
     }
     return chat_payload, incoming_model, stats

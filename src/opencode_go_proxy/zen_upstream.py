@@ -82,7 +82,6 @@ from .upstream import (
     usage_tokens,
 )
 from .upstream_headers import base_upstream_headers
-from .vision import caption_images_in_messages
 from .zen_catalog import ZEN_PREFIX, resolve_family, zen_families, zen_model_ids
 
 Json = dict[str, Any]
@@ -265,7 +264,6 @@ def _build_family_request(
     base_url: str,
     extra_headers: Mapping[str, str] | None = None,
     function_tools_only: bool = False,
-    caption_images: bool = False,
     config: ProxyConfig | None = None,
     request_id: str | None = None,
     google_auth: str = "key",
@@ -305,19 +303,6 @@ def _build_family_request(
         working = inject_session_model(dict(payload), session_model)
         working["model"] = bare_id
         chat_payload, _request_model, stats = responses_payload_to_chat_payload(working)
-        if (
-            caption_images
-            and stats.get("has_image")
-            and stats.get("tools_present")
-            and config is not None
-            and request_id is not None
-        ):
-            chat_payload = caption_images_in_messages(
-                chat_payload,
-                bare_id,
-                config,
-                request_id,
-            )
         # The catalog translation can rewrite the model (image fallback /
         # unknown slug); the zen upstream is addressed with the bare zen id,
         # never a substitute.
@@ -1303,7 +1288,6 @@ def call_family_responses(
     extra_headers: Mapping[str, str] | None = None,
     function_tools_only: bool = False,
     restore_namespaces: bool = False,
-    caption_images: bool = False,
     google_auth: str = "key",
 ) -> Json:
     """Non-stream Responses call through one certified protocol family."""
@@ -1318,7 +1302,6 @@ def call_family_responses(
         base_url=base_url,
         extra_headers=extra_headers,
         function_tools_only=function_tools_only,
-        caption_images=caption_images,
         config=config,
         request_id=request_id,
         google_auth=google_auth,
@@ -2237,7 +2220,6 @@ def handle_family_responses_request(
     extra_headers: Mapping[str, str] | None = None,
     function_tools_only: bool = False,
     restore_namespaces: bool = False,
-    caption_images: bool = False,
     google_auth: str = "key",
 ) -> None:
     """Serve a Responses request through one certified upstream family."""
@@ -2282,8 +2264,7 @@ def handle_family_responses_request(
                 extra_headers=extra_headers,
                 function_tools_only=function_tools_only,
                 restore_namespaces=restore_namespaces,
-                caption_images=caption_images,
-                google_auth=google_auth,
+                        google_auth=google_auth,
             )
         except ProxyError as exc:
             status = exc.upstream_status if exc.upstream_status is not None else int(exc.status)
@@ -2317,8 +2298,7 @@ def handle_family_responses_request(
                 extra_headers=extra_headers,
                 function_tools_only=function_tools_only,
                 restore_namespaces=restore_namespaces,
-                caption_images=caption_images,
-                google_auth=google_auth,
+                        google_auth=google_auth,
             )
         _send_json(handler, result)
         return
@@ -2333,7 +2313,6 @@ def handle_family_responses_request(
         base_url=base_url,
         extra_headers=extra_headers,
         function_tools_only=function_tools_only,
-        caption_images=caption_images,
         config=config,
         request_id=request_id,
         google_auth=google_auth,
@@ -2379,8 +2358,7 @@ def handle_family_responses_request(
                         base_url=base_url,
                         extra_headers=extra_headers,
                         function_tools_only=function_tools_only,
-                        caption_images=caption_images,
-                        config=config,
+                                        config=config,
                         request_id=request_id,
                         google_auth=google_auth,
                     )

@@ -65,23 +65,6 @@ def isolated_estimate_state() -> None:
     meter.clear_estimate_latches()
 
 
-@pytest.fixture(autouse=True)
-def isolated_caption_cache() -> None:
-    """Caption cache and local-probe state are process-global; clear them.
-
-    A shared caption hit would make integration tests pass without exercising
-    the upstream, and a cached local-runtime probe would leak one test's
-    runtime state into the next.
-    """
-    from opencode_go_proxy import vision
-
-    vision.CAPTION_CACHE.clear()
-    vision.clear_local_probe_cache()
-    yield
-    vision.CAPTION_CACHE.clear()
-    vision.clear_local_probe_cache()
-
-
 @pytest.fixture
 def script_bin(tmp_path):
     """Write a fake executable for the ``OPENCODE_GO_PROXY_CODEX_BIN``-style env vars.

@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from opencode_go_proxy import meter, secrets, upstream, vision
+from opencode_go_proxy import meter, secrets, upstream
 from opencode_go_proxy.app import build_parser
 from opencode_go_proxy.config import ProxyConfig, resolve_chat_base_url
 from opencode_go_proxy.errors import ProxyError
@@ -16,51 +16,6 @@ class TestEnvMatrix:
     def test_max_retries(self, value, expected) -> None:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_MAX_RETRIES": value}, clear=True):
             assert upstream.default_max_retries() == expected
-
-    @pytest.mark.parametrize("value,expected", [("5", 5.0), ("0.5", 1.0), ("junk", 30.0), ("", 30.0)])
-    def test_caption_timeout(self, value, expected) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_CAPTION_TIMEOUT_SEC": value}, clear=True):
-            assert upstream.caption_timeout_sec() == expected
-
-    @pytest.mark.parametrize(
-        "value,expected",
-        [("mimo-v2.5", "mimo-v2.5"), ("local", vision.DEFAULT_LOCAL_VISION_MODEL), ("gpt-junk", "gpt-junk")],
-    )
-    def test_caption_model_pin(self, value, expected) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_CAPTION_MODEL": value}, clear=True):
-            engines = vision.resolve_engines("deepseek-v4-flash")
-        assert [e.model for e in engines] == [expected]
-
-    def test_caption_model_codex_override(self) -> None:
-        with mock.patch.dict(
-            os.environ, {"CODEX_IMAGE_MODEL": "mimo-v2.5-pro", "OPENCODE_GO_PROXY_CAPTION_MODEL": "mimo-v2.5"},
-            clear=True,
-        ):
-            engines = vision.resolve_engines("deepseek-v4-flash")
-        assert [e.model for e in engines] == ["mimo-v2.5-pro"]
-
-    def test_caption_model_auto_picks_cheapest_enabled(self) -> None:
-        models = [
-            {"slug": "mimo-v2.5-pro", "input_modalities": ["text", "image"], "priority": 2},
-            {"slug": "deepseek-v4-flash", "input_modalities": ["text", "image"], "priority": 1},
-        ]
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
-            "opencode_go_proxy.vision.catalog_image_models", return_value=models
-        ), mock.patch("opencode_go_proxy.vision.local_runtime_enabled", return_value=False):
-            engines = vision.resolve_engines("deepseek-v4-flash")
-        assert [e.model for e in engines] == ["deepseek-v4-flash"]
-
-    def test_caption_model_auto_falls_back_without_catalog(self) -> None:
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
-            "opencode_go_proxy.vision.catalog_image_models", return_value=[]
-        ), mock.patch("opencode_go_proxy.vision.local_runtime_enabled", return_value=False):
-            engines = vision.resolve_engines("deepseek-v4-flash")
-        assert [e.model for e in engines] == ["mimo-v2.5"]
-
-    @pytest.mark.parametrize("value,expected", [("low", "low"), ("high", "high"), ("none", None), ("off", None)])
-    def test_caption_detail(self, value, expected) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_CAPTION_DETAIL": value}, clear=True):
-            assert vision.caption_detail() == expected
 
     def test_state_dir(self, tmp_path) -> None:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_STATE_DIR": str(tmp_path)}, clear=True):

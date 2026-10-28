@@ -50,7 +50,6 @@ from .upstream import (
     retry_sleep,
     usage_tokens,
 )
-from .vision import caption_images_in_messages, is_image_rejection_status
 
 Json = dict[str, Any]
 
@@ -280,18 +279,6 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
     ka_thread.start()
 
     try:
-        if conversion_stats.get("has_image") and conversion_stats.get("tools_present"):
-            chat_payload = caption_images_in_messages(chat_payload, request_model, config, request_id)
-            conversion_stats["upstream_model"] = chat_payload.get("model")
-
-        # Runtime image fallback (plan 009 escape hatch): a non-tools image turn
-        # routed to a catalog-promised model can still be rejected by the
-        # upstream (400/404/415/422). The first such rejection re-captions the
-        # images and retries the same requested model once; the client sees one
-        # stream either way.
-        fell_back = False
-        fallback_attempts = 0
-
         chat_payload["stream"] = True
         # Ask the upstream to include the usage object in the stream; without
         # stream_options.include_usage most OpenAI-compatible endpoints omit it,
@@ -390,7 +377,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
             nonlocal text, reasoning, tool_calls, tool_call_items, tool_call_open, usage
             nonlocal item_open, reasoning_open, reasoning_emitted, total_retries
             nonlocal next_output_index, msg_index, tool_indices, reasoning_index
-            nonlocal req, raw_payload, chat_payload, fell_back, fallback_attempts
+            nonlocal req, raw_payload, chat_payload
             nonlocal created_emitted
 
             # Per-attempt emission state; an empty attempt never opens items,
@@ -462,23 +449,6 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
                 total_retries += fail.attempts
                 exc = fail.exc
                 if isinstance(exc, urllib.error.HTTPError):
-                    if (
-                        not fell_back
-                        and conversion_stats.get("has_image")
-                        and not conversion_stats.get("tools_present")
-                        and is_image_rejection_status(exc.code)
-                    ):
-                        fell_back = True
-                        fallback_attempts += 1
-                        trace("image_fallback", level="warn", request_id=request_id, kind="caption", status=exc.code,
-                              model=request_model, stream=True)
-                        chat_payload = caption_images_in_messages(chat_payload, request_model, config, request_id)
-                        conversion_stats["upstream_model"] = chat_payload.get("model")
-                        raw_payload = json.dumps(chat_payload, separators=(",",":")).encode("utf-8")
-                        req = _make_req()
-                        trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload),
-                              stream=True, fallback=True)
-                        return "fallback"
                     from opencode_go_proxy.app import (
                         _go_reject_zen_fallback,
                         is_go_not_supported_rejection,
@@ -516,13 +486,13 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
                     # No upstream bytes were ever streamed, so this is not a mid-stream
                     # abort: meter the real final upstream status, not a synthetic 502.
                     record_usage_event(model=model, status=exc.code, duration_ms=int((time.time() - started) * 1000),
-                                       retries=total_retries + fallback_attempts)
+                                       retries=total_retries)
                     return "error"
                 send_error(f"upstream network error: {getattr(exc, 'reason', exc)}")
                 # Network failure: no upstream status exists (502) and nothing was
                 # streamed, so no streamAborted marker.
                 record_usage_event(model=model, status=502, duration_ms=int((time.time() - started) * 1000),
-                                   retries=total_retries + fallback_attempts)
+                                   retries=total_retries)
                 return "error"
 
             from opencode_go_proxy.app import clear_go_unsupported
@@ -617,7 +587,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
                       status=code or getattr(exc, "reason", str(exc)))
                 send_error("upstream stream aborted")
                 record_usage_event(model=model, status=502, duration_ms=int((time.time() - started) * 1000),
-                                   stream_aborted=True, retries=total_retries + fallback_attempts)
+                                   stream_aborted=True, retries=total_retries)
                 return "error"
 
             trace("upstream.done", level="debug", request_id=request_id, status=200,
@@ -630,7 +600,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
             if not got_data:
                 send_error("upstream returned no SSE data")
                 record_usage_event(model=model, status=502, duration_ms=int((time.time() - started) * 1000),
-                                   retries=total_retries + fallback_attempts)
+                                   retries=total_retries)
                 return "nodata"
             if not text and not tool_calls and not reasoning:
                 return "empty"
@@ -642,8 +612,6 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
             outcome = run_attempt()
             if outcome in ("error", "gone", "nodata", "zen"):
                 return
-            if outcome == "fallback":
-                continue
             if outcome == "empty":
                 empty_attempts += 1
                 if empty_attempts == 1:
@@ -661,7 +629,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
                 record_usage_event(model=model, status=502, duration_ms=duration_ms,
                                    input_tokens=inp, output_tokens=outp, total_tokens=total,
                                    estimated_input_tokens=estimated,
-                                   empty_completion=True, retries=total_retries + 1 + fallback_attempts)
+                                   empty_completion=True, retries=total_retries + 1)
                 return
             break
 
@@ -752,7 +720,7 @@ def handle_streaming_request(payload: Json, config: ProxyConfig, request_id: str
         record_usage_event(model=model, status=200, duration_ms=duration_ms,
                            input_tokens=inp, output_tokens=outp, total_tokens=total,
                            estimated_input_tokens=estimated,
-                           retries=total_retries + empty_attempts + fallback_attempts)
+                           retries=total_retries + empty_attempts)
     finally:
         keepalive_stop.set()
 
