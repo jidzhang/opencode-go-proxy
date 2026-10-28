@@ -14,11 +14,9 @@ from opencode_go_proxy.app import ProxyConfig
 from opencode_go_proxy.errors import ProxyError
 from opencode_go_proxy.secrets import clear_api_key_cache
 from opencode_go_proxy.upstream import (
-    DEFAULT_CAPTION_TIMEOUT_SEC,
     DEFAULT_MAX_RETRIES,
     call_upstream_chat,
     call_upstream_chat_verbatim,
-    caption_timeout_sec,
     normalize_usage_limit_error,
     retriable_http_failure,
 )
@@ -213,16 +211,8 @@ class TestRetryPolicy:
 
 class TestCaptionBudget:
     def test_defaults(self) -> None:
-        assert DEFAULT_CAPTION_TIMEOUT_SEC == 30.0
         assert DEFAULT_MAX_RETRIES == 2
 
-    def test_env_override(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_CAPTION_TIMEOUT_SEC": "45"}, clear=True):
-            assert caption_timeout_sec() == 45.0
-
-    def test_malformed_falls_back(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_CAPTION_TIMEOUT_SEC": "x"}, clear=True):
-            assert caption_timeout_sec() == 30.0
 
 
 class TestVerbatimPassthroughClient:

@@ -131,7 +131,6 @@ def handle_go_responses_request(
         extra_headers=opencode_session_headers(handler.headers, payload),
         function_tools_only=True,
         restore_namespaces=True,
-        caption_images=True,
         google_auth=google_auth,
     )
 

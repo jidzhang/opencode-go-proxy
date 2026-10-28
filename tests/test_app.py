@@ -19,7 +19,6 @@ from opencode_go_proxy.app import (
 )
 from opencode_go_proxy.secrets import resolve_api_key
 from opencode_go_proxy.trace import _mask_trace_body
-from opencode_go_proxy.upstream import caption_timeout_sec as _caption_timeout_sec
 
 
 def make_config() -> ProxyConfig:
@@ -254,23 +253,6 @@ class MaskTraceBodyTests(unittest.TestCase):
     def test_truncates_to_limit(self) -> None:
         masked = _mask_trace_body("x" * 5000, limit=100)
         self.assertEqual(len(masked), 100)
-
-
-class CaptionTimeoutTests(unittest.TestCase):
-    def test_defaults_to_30_seconds(self) -> None:
-        self.assertEqual(_caption_timeout_sec(), 30.0)
-
-    def test_env_override_applies(self) -> None:
-        with unittest.mock.patch.dict("os.environ", {"OPENCODE_GO_PROXY_CAPTION_TIMEOUT_SEC": "90"}):
-            self.assertEqual(_caption_timeout_sec(), 90.0)
-
-    def test_malformed_env_falls_back_to_default(self) -> None:
-        with unittest.mock.patch.dict("os.environ", {"OPENCODE_GO_PROXY_CAPTION_TIMEOUT_SEC": "not-a-number"}):
-            self.assertEqual(_caption_timeout_sec(), 30.0)
-
-    def test_zero_env_is_clamped_to_one_second(self) -> None:
-        with unittest.mock.patch.dict("os.environ", {"OPENCODE_GO_PROXY_CAPTION_TIMEOUT_SEC": "0"}):
-            self.assertEqual(_caption_timeout_sec(), 1.0)
 
 
 class CatalogRefreshTimerTests(unittest.TestCase):

@@ -70,7 +70,6 @@ from .upstream import (
     record_cache,
     usage_tokens,
 )
-from .vision import caption_images_in_messages, is_image_rejection_status
 from .zen_catalog import ZEN_PREFIX, zen_model_ids
 from .zen_upstream import (
     call_zen_responses,
@@ -592,63 +591,35 @@ def handle_responses_request(payload: Json, config: ProxyConfig, request_id: str
     payload = inject_session_model(payload, session_model)
     chat_payload, request_model, conversion_stats = responses_payload_to_chat_payload(payload)
 
-    # Split-turn: if image + tools, caption images via a vision sub-call, then route to the requested model.
-    # MiMo can't drive tool loops from tool-role image messages; caption + requested model keeps the agent loop alive.
-    if conversion_stats.get("has_image") and conversion_stats.get("tools_present"):
-        chat_payload = caption_images_in_messages(chat_payload, request_model, config, request_id)
-        conversion_stats["upstream_model"] = chat_payload.get("model")
-
     trace(
         "request.converted", level="debug",
         request_id=request_id,
         stats=conversion_stats,
         upstream_model=chat_payload.get("model"),
     )
-    fell_back = False
     try:
         chat, retries = call_upstream_chat(chat_payload, config, request_id)
     except ProxyError as exc:
         status = exc.upstream_status if exc.upstream_status is not None else int(exc.status)
-        if (
-            conversion_stats.get("has_image")
-            and not conversion_stats.get("tools_present")
-            and is_image_rejection_status(status)
-        ):
-            # Runtime rescue (plan 009 escape hatch): the catalog promised the
-            # requested model image input but the upstream rejected the payload.
-            # Caption the images and retry the same requested model once.
-            fell_back = True
-            trace("image_fallback", level="warn", request_id=request_id, kind="caption", status=status, model=request_model)
-            chat_payload = caption_images_in_messages(chat_payload, request_model, config, request_id)
-            conversion_stats["upstream_model"] = chat_payload.get("model")
-            try:
-                chat, retries = call_upstream_chat(chat_payload, config, request_id)
-            except ProxyError as exc2:
-                record_usage_event(
-                    model=request_model, status=int(exc2.status), duration_ms=int((time.time() - started) * 1000),
-                    retries=(exc2.retries or 0) + 1,
-                )
-                raise
-        else:
-            if _go_reject_zen_fallback(session_model, status, exc.body):
-                # The go gateway advertises this bare slug but does not serve
-                # it (ModelError "not supported"); zen owns it. Re-dispatch
-                # the identical original body to the zen path, which
-                # translates per wire family; the zen result/error envelope
-                # becomes the response.
-                trace("fallback.go_reject_zen", level="info", request_id=request_id, model=session_model,
-                      status=status, path="responses")
-                return call_zen_responses(original_payload, config, request_id)
-            elif is_go_not_supported_rejection(session_model, status, exc.body):
-                # The go catalog advertises this bare slug but the gateway does
-                # not serve it and zen does not own it: count the rejection so
-                # the picker self-cleans after two strikes.
-                record_go_unsupported(session_model)
-            record_usage_event(
-                model=request_model, status=int(exc.status), duration_ms=int((time.time() - started) * 1000),
-                retries=exc.retries or None,
-            )
-            raise
+        if _go_reject_zen_fallback(session_model, status, exc.body):
+            # The go gateway advertises this bare slug but does not serve
+            # it (ModelError "not supported"); zen owns it. Re-dispatch
+            # the identical original body to the zen path, which
+            # translates per wire family; the zen result/error envelope
+            # becomes the response.
+            trace("fallback.go_reject_zen", level="info", request_id=request_id, model=session_model,
+                  status=status, path="responses")
+            return call_zen_responses(original_payload, config, request_id)
+        elif is_go_not_supported_rejection(session_model, status, exc.body):
+            # The go catalog advertises this bare slug but the gateway does
+            # not serve it and zen does not own it: count the rejection so
+            # the picker self-cleans after two strikes.
+            record_go_unsupported(session_model)
+        record_usage_event(
+            model=request_model, status=int(exc.status), duration_ms=int((time.time() - started) * 1000),
+            retries=exc.retries or None,
+        )
+        raise
     clear_go_unsupported(request_model)
     record_cache(config.cache_tracker, chat_payload.get("model"), chat.get("usage"))
     context_cap = model_context_window(request_model) or DEFAULT_ESTIMATE_CONTEXT_WINDOW
@@ -668,7 +639,7 @@ def handle_responses_request(payload: Json, config: ProxyConfig, request_id: str
         model=request_model, status=200, duration_ms=int((time.time() - started) * 1000),
         input_tokens=inp, output_tokens=outp, total_tokens=total,
         estimated_input_tokens=estimated,
-        retries=retries + (1 if fell_back else 0),
+        retries=retries,
     )
     return response
 

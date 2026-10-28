@@ -7,7 +7,6 @@ from unittest import mock
 from opencode_go_proxy import protocol
 from opencode_go_proxy.codex_tools import load_snapshot_tools
 from opencode_go_proxy.protocol import (
-    IMAGE_MODEL_DEFAULT,
     cache_stats_from_usage,
     chat_completion_to_response,
     normalize_usage,
@@ -467,7 +466,7 @@ class CatalogCacheCoalescingTests(unittest.TestCase):
 
         return mock.patch("builtins.open", side_effect=counting_open), calls
 
-    def test_stable_file_parsed_once_for_all_three_views(self) -> None:
+    def test_stable_file_parsed_once_for_all_views(self) -> None:
         catalog = self._write_catalog(
             [
                 {"slug": "alpha", "context_window": 4000, "input_modalities": ["text", "image"]},
@@ -479,11 +478,10 @@ class CatalogCacheCoalescingTests(unittest.TestCase):
             self.assertEqual(protocol.known_models(), {"alpha", "beta"})
             self.assertEqual(protocol.model_context_window("alpha"), 4000)
             self.assertEqual(protocol.model_context_window("beta"), None)
-            self.assertEqual(protocol.image_capable_models(), {"alpha"})
             self.assertEqual(protocol.known_models(), {"alpha", "beta"})
         self.assertEqual(calls["count"], 1)
 
-    def test_mutated_catalog_reparses_once_for_all_three_views(self) -> None:
+    def test_mutated_catalog_reparses_once_for_all_views(self) -> None:
         catalog = self._write_catalog(
             [
                 {"slug": "alpha", "context_window": 4000, "input_modalities": ["text", "image"]},
@@ -492,7 +490,6 @@ class CatalogCacheCoalescingTests(unittest.TestCase):
         )
         open_patch, calls = self._parse_counter(catalog)
         with mock.patch.dict(os.environ, {"CODEX_MODEL_CATALOG": catalog}), open_patch:
-            self.assertEqual(protocol.image_capable_models(), {"alpha"})
             self.assertEqual(protocol.model_context_window("alpha"), 4000)
             self.assertEqual(calls["count"], 1)
 
@@ -509,7 +506,6 @@ class CatalogCacheCoalescingTests(unittest.TestCase):
 
             self.assertEqual(protocol.known_models(), {"gamma"})
             self.assertEqual(protocol.model_context_window("gamma"), 8000)
-            self.assertEqual(protocol.image_capable_models(), {"gamma"})
         self.assertEqual(calls["count"], 2)
 
     def test_reload_known_models_bypasses_mtime_cache(self) -> None:
@@ -566,7 +562,7 @@ class ImageRoutingTests(unittest.TestCase):
         self.assertEqual(chat["model"], "deepseek-v4-flash")
         self.assertEqual(stats["upstream_model"], "deepseek-v4-flash")
 
-    def test_image_turn_falls_back_to_image_default_for_text_only_model(self) -> None:
+    def test_image_turn_keeps_requested_model_verbatim(self) -> None:
         catalog = self._write_catalog(
             [
                 {"slug": "text-only-model", "input_modalities": ["text"]},
@@ -576,31 +572,6 @@ class ImageRoutingTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CODEX_MODEL_CATALOG": catalog}):
             chat, _model, stats = responses_payload_to_chat_payload(
                 self._image_payload("text-only-model")
-            )
-        self.assertEqual(chat["model"], IMAGE_MODEL_DEFAULT)
-        self.assertEqual(stats["upstream_model"], IMAGE_MODEL_DEFAULT)
-
-    def test_image_turn_env_override_wins_for_text_only_model(self) -> None:
-        catalog = self._write_catalog(
-            [
-                {"slug": "text-only-model", "input_modalities": ["text"]},
-                {"slug": "other-vision-model", "input_modalities": ["text", "image"]},
-            ]
-        )
-        with mock.patch.dict(
-            os.environ, {"CODEX_MODEL_CATALOG": catalog, "CODEX_IMAGE_MODEL": "other-vision-model"}
-        ):
-            chat, _model, stats = responses_payload_to_chat_payload(
-                self._image_payload("text-only-model")
-            )
-        self.assertEqual(chat["model"], "other-vision-model")
-        self.assertEqual(stats["upstream_model"], "other-vision-model")
-
-    def test_non_image_turn_never_uses_image_default(self) -> None:
-        catalog = self._write_catalog([{"slug": "text-only-model", "input_modalities": ["text"]}])
-        with mock.patch.dict(os.environ, {"CODEX_MODEL_CATALOG": catalog}):
-            chat, _model, stats = responses_payload_to_chat_payload(
-                {"model": "text-only-model", "input": "hello"}
             )
         self.assertEqual(chat["model"], "text-only-model")
         self.assertEqual(stats["upstream_model"], "text-only-model")

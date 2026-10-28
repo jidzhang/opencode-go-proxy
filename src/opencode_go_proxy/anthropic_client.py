@@ -832,7 +832,6 @@ def handle_anthropic_messages_request(
             provider=GO_PROVIDER,
             extra_headers=extra_headers,
             function_tools_only=True,
-            caption_images=True,
             google_auth=google_auth,
         )
         _send_json(handler, responses_to_anthropic_message(result, model))
@@ -848,7 +847,6 @@ def handle_anthropic_messages_request(
         base_url=base_url,
         extra_headers=extra_headers,
         function_tools_only=True,
-        caption_images=True,
         config=config,
         request_id=request_id,
         google_auth=google_auth,
