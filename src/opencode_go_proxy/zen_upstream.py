@@ -50,6 +50,7 @@ from .protocol import (
     env_flag,
     extract_reasoning_effort,
     flatten_content,
+    flatten_tool_name,
     inject_session_model,
     maybe_detox_payload,
     model_context_window,
@@ -291,9 +292,10 @@ def _build_family_request(
                     name = tool_choice.get("name")
                     namespace = tool_choice.get("namespace")
                     if isinstance(name, str) and name:
-                        if isinstance(namespace, str) and namespace:
-                            name = f"{namespace}__{name}"
-                        working["tool_choice"] = {"type": "function", "name": name}
+                        working["tool_choice"] = {
+                            "type": "function",
+                            "name": flatten_tool_name(namespace, name),
+                        }
         url = _family_endpoint(base_url, family, bare_id, stream=stream)
         return url, working, _family_headers(
             family, api_key, extra_headers=extra_headers

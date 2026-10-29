@@ -38,6 +38,7 @@ from .meter import record_usage_event
 from .opencode_session import opencode_session_headers
 from .protocol import (
     flatten_content,
+    flatten_tool_name,
     new_response_id,
     output_text_from_items,
     require_model,
@@ -137,7 +138,7 @@ def _item_text(item: Any) -> str:
     if item_type == "function_call":
         name = item.get("name") or ""
         namespace = item.get("namespace")
-        full = f"{namespace}__{name}" if namespace else name
+        full = flatten_tool_name(namespace, name)
         return f"[tool call] {full} {item.get('arguments') or '{}'}"
     if item_type == "function_call_output":
         output = item.get("output")
