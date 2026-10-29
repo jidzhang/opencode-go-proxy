@@ -102,7 +102,7 @@ environment variables (no config-file edit needed):
 ```bash
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8787"
 export ANTHROPIC_AUTH_TOKEN="local"        # any value; loopback is not authenticated
-export ANTHROPIC_MODEL="opencode-go/glm-5.2"
+export ANTHROPIC_MODEL="opencode-go/claude-haiku-5-5"
 claude
 ```
 
@@ -201,9 +201,9 @@ tokenizer count.
 ### Switching models
 
 ```bash
-codex -m opencode-go/deepseek-v4-pro
-codex -m opencode-go/glm-5.2
-codex -m opencode-go/minimax-m3
+codex -m opencode-go/deepseek-v4.1-flash
+codex -m opencode-go/glm-5.3-flash
+codex -m opencode-go/gpt-6-luna
 ```
 
 ### How models are routed
@@ -391,7 +391,7 @@ curl http://127.0.0.1:8787/cache
 {
   "models": [
     {
-      "model": "deepseek-v4-flash",
+      "model": "deepseek-v4.1-flash",
       "cache_hit_tokens": 100000,
       "cache_miss_tokens": 1000,
       "requests": 50,
@@ -484,7 +484,7 @@ curl http://127.0.0.1:8787/state
       "last7d": [0, 0, 0, 0, 1200, 400, 812]
     }
   },
-  "model": "deepseek-v4-flash"
+  "model": "deepseek-v4.1-flash"
 }
 ```
 
@@ -657,7 +657,7 @@ For Claude Code on a laptop, the whole configuration is:
 ```bash
 export ANTHROPIC_BASE_URL="http://<proxy-host>:8787"
 export ANTHROPIC_AUTH_TOKEN="<caller-token>"
-export ANTHROPIC_MODEL="opencode-go/glm-5.2"
+export ANTHROPIC_MODEL="opencode-go/claude-haiku-5-5"
 ```
 
 The proxy never forwards the caller token upstream: Go/Zen requests rebuild
