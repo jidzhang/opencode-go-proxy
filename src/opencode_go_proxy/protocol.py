@@ -455,7 +455,7 @@ def responses_input_to_chat_messages(payload: Json) -> tuple[list[Json], Json]:
         if item_type == "function_call":
             ns = item.get("namespace")
             name = item.get("name", "")
-            flat_name = f"{ns}__{name}" if ns else name
+            flat_name = flatten_tool_name(ns, name)
             pending_assistant_tool_calls.append(
                 {
                     "id": item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex}",
@@ -670,6 +670,18 @@ def responses_tools_to_function_tools(tools: Any) -> tuple[list[Json] | None, Js
             }
         )
     return result or None, stats
+
+
+def flatten_tool_name(namespace: Any, name: str) -> str:
+    """Join an optional tool namespace and bare name into the flat chat form.
+
+    Inverse of the "__" split in :func:`restore_namespaced_function_calls`:
+    ``("codex_app", "create_thread")`` becomes ``codex_app__create_thread``; an
+    absent or empty namespace leaves the bare name unchanged.
+    """
+    if isinstance(namespace, str) and namespace:
+        return f"{namespace}__{name}"
+    return name
 
 
 def restore_namespaced_function_calls(value: Any) -> Any:
