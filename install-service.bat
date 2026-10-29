@@ -49,9 +49,6 @@ echo ============================================
 echo.
 
 echo [1/8] Stopping any manual proxy on port 19999 ...
-rem Prune old NSSM rotations beyond the newest 5 generations.
-powershell -NoProfile -Command "Get-ChildItem '%~dp0logs\service.err-*.log','%~dp0logs\service.out-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -ErrorAction SilentlyContinue"
-
 rem Kill only listeners that are this repo's own venv proxy; an unrelated
 rem process on the port is reported and left alone.
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":19999" ^| findstr LISTENING') do (
@@ -100,6 +97,8 @@ if errorlevel 1 goto :configure_failed
 if errorlevel 1 goto :configure_failed
 "%NSSM%" set %SVC% AppRotateBytes 52428800
 if errorlevel 1 goto :configure_failed
+rem Prune old NSSM rotations beyond the newest 5 generations.
+powershell -NoProfile -Command "Get-ChildItem '%~dp0logs\service.err-*.log','%~dp0logs\service.out-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -ErrorAction SilentlyContinue"
 echo.
 
 echo [5/8] Configuring environment ...

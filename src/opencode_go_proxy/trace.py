@@ -108,7 +108,6 @@ _queue: queue.Queue = queue.Queue(maxsize=_QUEUE_SIZE)
 _writer_started = False
 _writer_lock = threading.Lock()
 _writer_thread: threading.Thread | None = None
-_stop = threading.Event()
 _dropped = 0
 _dropped_lock = threading.Lock()
 
@@ -120,13 +119,15 @@ def trace_dropped_count() -> int:
 
 
 def _writer_loop() -> None:
-    while not _stop.is_set():
+    while True:
         try:
-            first = _queue.get(timeout=0.1)
-        except queue.Empty:
-            continue
+            first = _queue.get()
         except Exception:  # noqa: BLE001 - keep the writer alive
             continue
+        if first is None:
+            # Shutdown sentinel from _drain_at_exit: exit promptly instead of
+            # polling, so the writer blocks on get() the rest of its life.
+            return
         batch = [first]
         try:
             while len(batch) < _BATCH_SIZE:
@@ -174,13 +175,17 @@ def _drain_at_exit() -> None:
     Stopping first is what prevents the Fatal Python error noise on shutdown:
     a daemon writer that is still running when the interpreter finalizes races
     the closing of stderr and prints a buffered-writer lock crash stack on
-    every stop. Signaling and joining it here (atexit runs before daemon
-    threads are killed) means finalization never catches it mid-write.
+    every stop. The sentinel wakes a writer blocked on get(), the join waits
+    out any in-flight batch, and atexit runs before daemon threads are killed,
+    so finalization never catches the writer mid-write.
     """
     try:
-        _stop.set()
         thread = _writer_thread
         if thread is not None and thread.is_alive():
+            try:
+                _queue.put_nowait(None)
+            except queue.Full:
+                pass
             thread.join(timeout=1.0)
         lines = []
         while True:
