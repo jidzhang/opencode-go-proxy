@@ -49,6 +49,7 @@ from .protocol import (
     drop_dangling_function_calls,
     extract_reasoning_effort,
     new_response_id,
+    require_model,
 )
 from .streaming import KeepaliveWriter, _ConnectFailed, _open_upstream_stream
 from .trace import trace
@@ -787,13 +788,7 @@ def handle_anthropic_messages_request(
     so Claude Code can drive every Go model.
     """
     started = time.time()
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
+    model = require_model(payload)
     bare_id, family = go_request_identity(model)
     if family == ANTHROPIC_MESSAGES:
         handle_go_messages_request(handler, payload, config, request_id)

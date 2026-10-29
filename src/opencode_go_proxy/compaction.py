@@ -40,6 +40,7 @@ from .protocol import (
     flatten_content,
     new_response_id,
     output_text_from_items,
+    require_model,
 )
 from .routing import normalize_model_slug, route_target
 from .secrets import resolve_api_key
@@ -139,7 +140,14 @@ def _item_text(item: Any) -> str:
         full = f"{namespace}__{name}" if namespace else name
         return f"[tool call] {full} {item.get('arguments') or '{}'}"
     if item_type == "function_call_output":
-        return f"[tool result] {flatten_content(item.get('output'))}"
+        output = item.get("output")
+        if output is None:
+            rendered = ""
+        elif isinstance(output, str):
+            rendered = output
+        else:
+            rendered = json.dumps(output, separators=(",", ":"), default=str)
+        return f"[tool result] {rendered}"
     if item_type == "reasoning":
         return ""
     return flatten_content(item.get("content"))
@@ -357,13 +365,7 @@ def handle_compaction(
     """
     started = time.time()
     v2 = path not in COMPACT_PATHS
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
+    model = require_model(payload)
     provider = ZEN_PROVIDER if route_target(model) == "zen" else GO_PROVIDER
     try:
         summary, inp, outp, total, retries = _summarize(payload, model, config, request_id)

@@ -9,6 +9,7 @@ write contrib/opencode-go-models.json.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -16,28 +17,28 @@ FULL_PATH = REPO_ROOT / "contrib" / "opencode-go-catalog.json"
 COMPACT_PATH = REPO_ROOT / "contrib" / "opencode-go-models.json"
 CLIENT_VERSION = "0.147.0"
 
-# auto_compact_token_limit is derived from context_window at render time, so
-# the compact form never stores it (the same rule as _default_model_record).
-DROPPED_KEYS = frozenset({"base_instructions", "model_messages", "auto_compact_token_limit"})
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from opencode_go_proxy.catalog import _canonical_model_defaults  # noqa: E402
+
+# Keys the renderer computes at render time, so the compact form never stores
+# them (the same rule as catalog._default_model_record).
+_COMPUTED_KEYS = {"base_instructions", "model_messages", "auto_compact_token_limit"}
+DROPPED_KEYS = frozenset(_COMPUTED_KEYS)
 
 # Client-contract values the Codex catalog shape needs but the upstream does not
-# publish. They are only supplied when the source record omits the key: an
-# explicit value in the full catalog always wins, so regenerating never flips a
-# deliberate "hide" back to "list" or clears a real capability.
+# publish. Derived from the renderer's canonical defaults so the generator and
+# catalog.py can never drift apart; per-model identity keys and the window pair
+# are excluded (identity comes from the record, an unknown window stays null).
+# Supplied only when the source record omits the key: an explicit value in the
+# full catalog always wins, so regenerating never flips a deliberate "hide"
+# back to "list" or clears a real capability.
+_IDENTITY_KEYS = {"slug", "display_name", "description", "comp_hash",
+                  "context_window", "max_context_window"}
 FILL_IF_ABSENT = {
-    "effective_context_window_percent": 95,
-    "apply_patch_tool_type": "freeform",
-    "shell_type": "shell_command",
-    "visibility": "list",
-    "supported_in_api": True,
-    "additional_speed_tiers": [],
-    "service_tiers": [],
-    "availability_nux": None,
-    "upgrade": None,
-    "support_verbosity": False,
-    "default_verbosity": "low",
-    "experimental_supported_tools": [],
-    "use_responses_lite": False,
+    key: value
+    for key, value in _canonical_model_defaults().items()
+    if key not in _COMPUTED_KEYS and key not in _IDENTITY_KEYS
 }
 
 

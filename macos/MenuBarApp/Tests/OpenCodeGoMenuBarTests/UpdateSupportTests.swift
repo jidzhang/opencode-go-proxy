@@ -22,6 +22,18 @@ final class UpdateSupportTests: XCTestCase {
         try JSONDecoder().decode(ServerState.self, from: Data(json.utf8))
     }
 
+    func testStateWithNullModelStillDecodes() throws {
+        // The proxy reports null when no meter event exists; the whole card
+        // must not go blank because of it.
+        let payload = """
+        {"status":"ok","port":8787,"upstream":"https://opencode.ai/zen/go/v1",
+         "quota":null,"usage":{"todayTurns":0,"todayTokens":0,"last7d":[]},
+         "model":null,"version":"0.4.10","update":null}
+        """
+        let decoded = try decodeState(payload)
+        XCTAssertNil(decoded.model)
+    }
+
     // MARK: - Lenient /state decode
 
     func testOldStateWithoutVersionFieldsStillDecodes() throws {

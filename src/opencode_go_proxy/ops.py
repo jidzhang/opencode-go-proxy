@@ -332,7 +332,11 @@ def doctor(argv: list[str] | None = None) -> int:
 
 
 def _flag_value(argv: list[str], name: str) -> str | None:
-    """Value following ``name`` on the command line, or None."""
+    """Value for ``name`` given as ``--flag value`` or ``--flag=value``, or None."""
+    prefix = name + "="
+    for arg in argv:
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
     try:
         i = argv.index(name)
     except ValueError:
@@ -343,13 +347,7 @@ def _flag_value(argv: list[str], name: str) -> str | None:
 
 
 def _proxy_base_url(argv: list[str]) -> str:
-    base = os.environ.get(PROXY_BASE_URL_ENV) or DEFAULT_PROXY_BASE_URL
-    try:
-        i = argv.index("--base-url")
-    except ValueError:
-        return base.rstrip("/")
-    if i + 1 < len(argv):
-        base = argv[i + 1]
+    base = _flag_value(argv, "--base-url") or os.environ.get(PROXY_BASE_URL_ENV) or DEFAULT_PROXY_BASE_URL
     return base.rstrip("/")
 
 
@@ -512,11 +510,7 @@ def _repo_root() -> str:
 def support_bundle(argv: list[str] | None = None) -> int:
     """Write the JSON schema v1 diagnostic bundle to a mode-600 file."""
     argv = argv or []
-    out: str | None = None
-    if "--output" in argv:
-        i = argv.index("--output")
-        if i + 1 < len(argv):
-            out = argv[i + 1]
+    out: str | None = _flag_value(argv, "--output")
     if not out:
         out = os.path.join(os.getcwd(), f"opencode-go-support-{time.strftime('%Y%m%dT%H%M%S')}.json")
 

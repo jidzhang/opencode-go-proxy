@@ -16,6 +16,7 @@ from .go_models import ANTHROPIC_MESSAGES, GOOGLE_GEMINI, OPENAI_CHAT, go_family
 from .meter import record_usage_event
 from .opencode_session import opencode_session_headers
 from .passthrough import _relay_stream
+from .protocol import require_model
 from .secrets import resolve_api_key
 from .streaming import _ConnectFailed, _open_upstream_stream
 from .trace import trace
@@ -119,13 +120,7 @@ def handle_go_responses_request(
 ) -> None:
     """Translate a local Responses request to its documented Go endpoint."""
     started = time.time()
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
+    model = require_model(payload)
     bare_id, family = go_request_identity(model)
     base_url, google_auth = go_family_target(family, config)
     handle_family_responses_request(
@@ -276,13 +271,7 @@ def handle_go_chat_request(
 ) -> None:
     """Relay the local Chat Completions surface to a Go Chat model."""
     started = time.time()
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
+    model = require_model(payload)
     _, family = go_request_identity(model)
     if family != OPENAI_CHAT:
         expected = "/messages" if family == ANTHROPIC_MESSAGES else "/responses"
@@ -314,13 +303,7 @@ def handle_go_messages_request(
 ) -> None:
     """Relay the local Anthropic Messages surface to a Go Messages model."""
     started = time.time()
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
+    model = require_model(payload)
     _, family = go_request_identity(model)
     if family != ANTHROPIC_MESSAGES:
         expected = "/chat/completions" if family == OPENAI_CHAT else "/responses"
