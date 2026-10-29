@@ -1,7 +1,7 @@
-"""Anthropic Messages client surface: Claude Code → every certified Go family.
+"""Anthropic Messages client surface: Claude Code -> every certified Go family.
 
-Covers the request translation (Anthropic → Responses payload), the response
-translation (Responses object/SSE → Anthropic Message/events), the
+Covers the request translation (Anthropic -> Responses payload), the response
+translation (Responses object/SSE -> Anthropic Message/events), the
 /v1/messages endpoint dispatch over both translated families and the verbatim
 Messages family, the Anthropic error envelope, and count_tokens.
 """
@@ -286,7 +286,7 @@ class TestRequestTranslation:
             }
         ]
         assert out["tool_choice"] == {"type": "function", "name": "read_file"}
-        # The translated payload must survive the existing Responses→chat
+        # The translated payload must survive the existing Responses->chat
         # translation, which is what a chat-family upstream will run it through.
         chat, _model, _stats = responses_payload_to_chat_payload(out)
         assert chat["tools"][0]["type"] == "function"
@@ -987,7 +987,10 @@ def _gemini_response_body(text: str = "hi there") -> bytes:
 class TestGoGoogleFamily:
     def test_builder_points_at_go_google_endpoint_with_bearer(self):
         from opencode_go_proxy.go_models import GOOGLE_GEMINI
-        from opencode_go_proxy.zen_upstream import _build_family_request, go_google_base_url
+        from opencode_go_proxy.zen_upstream import (
+            _build_family_request,
+            go_google_base_url,
+        )
 
         url, body, headers = _build_family_request(
             {"model": "opencode-go/gemini-4-argon-contributor", "input": "hi"},
@@ -1009,7 +1012,10 @@ class TestGoGoogleFamily:
 
     def test_builder_stream_url_uses_sse_action(self):
         from opencode_go_proxy.go_models import GOOGLE_GEMINI
-        from opencode_go_proxy.zen_upstream import _build_family_request, go_google_base_url
+        from opencode_go_proxy.zen_upstream import (
+            _build_family_request,
+            go_google_base_url,
+        )
 
         url, _body, _headers = _build_family_request(
             {"model": "m", "input": "hi"},

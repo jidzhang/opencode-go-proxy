@@ -17,15 +17,15 @@ also includes Gemini-family routes. This proxy selects the documented wire
 protocol for each model in one local process:
 
 ```text
-Codex app ── POST /v1/responses (Responses API) ──┐
-                                                  │
-Claude Code ── POST /v1/messages (Anthropic) ─────┤
-                                                  ▼
-                                opencode-go-proxy  ←── localhost:8787, one runtime dep (zstandard)
-                                                  │
-                    POST per family: chat/completions · responses · messages · models/<id>
-                                                  ▼
-                        OpenCode Go / OpenCode Zen  ── 38 certified Go models · optional Zen models
+Codex app -- POST /v1/responses (Responses API) --+
+                                                  |
+Claude Code -- POST /v1/messages (Anthropic) -----+
+                                                  v
+                                opencode-go-proxy  <--- localhost:8787, one runtime dep (zstandard)
+                                                  |
+                    POST per family: chat/completions * responses * messages * models/<id>
+                                                  v
+                        OpenCode Go / OpenCode Zen  -- 38 certified Go models * optional Zen models
 ```
 
 ## Project and policy boundary
@@ -113,20 +113,20 @@ model, and unknown IDs are rejected before any upstream request.
 
 How the surface maps to upstreams:
 
-- Messages-family models (`minimax-m3`, `qwen3.8-max`, …) relay byte-verbatim;
+- Messages-family models (`minimax-m3`, `qwen3.8-max`, ...) relay byte-verbatim;
   the upstream's native Anthropic response is passed through unchanged.
 - Chat- and Responses-family models (`glm-*`, `deepseek-*`, `kimi-*`,
-  `grok-*`, …) are translated: the Anthropic request becomes a Responses
+  `grok-*`, ...) are translated: the Anthropic request becomes a Responses
   payload (reusing the same retry, metering, prefix caching, and image
   captioning as the Codex path), and the reply is translated back to Anthropic
-  content blocks and SSE events (`message_start` → content blocks →
+  content blocks and SSE events (`message_start` -> content blocks ->
   `message_stop`). Errors surface in the Anthropic error envelope.
 
 Phase 1 behavior differences, deliberate and safe to ignore in normal agent
 use:
 
 - `thinking` / `redacted_thinking` input blocks are dropped (Go models cannot
-  replay Anthropic-signed thinking). Thinking *output* — e.g. GLM reasoning —
+  replay Anthropic-signed thinking). Thinking *output* - e.g. GLM reasoning -
   is preserved and streams as real `thinking` content blocks.
 - `stop_sequences` are not forwarded; `cache_control` markers are stripped
   (upstream prompt caching is handled by the proxy itself, see
@@ -154,8 +154,8 @@ avoids ambiguity when a Go model and a native model have the same ID.
 
 `gemini-4-argon-contributor` is served only through Go's Google-native
 endpoint (`/inference/go/google/v1beta/models/<id>:generateContent`, Bearer
-auth) — the gateway returns `ModelProtocolUnsupported` for it on
-`/chat/completions`, `/responses`, and `/messages` — so the proxy routes it
+auth) - the gateway returns `ModelProtocolUnsupported` for it on
+`/chat/completions`, `/responses`, and `/messages` - so the proxy routes it
 there with the Zen Google translation and Bearer auth. It is absent from both
 the documentation table and the live `/models` listing, and needs a
 `user-models.json` overlay entry to appear in `/v1/models`.
@@ -166,9 +166,9 @@ table. The other seven (`glm-5.1`, `omen-alpha`, `deepseek-v4-flash`,
 `qwen3.6-plus`) are still served by the live `/models` endpoint, but their
 family assignments come from earlier documentation or direct protocol probes
 and have not been re-checked against the current table. The three newest Chat Completions entries (`omen-alpha`,
-`step-5-preview`, `cat-jam-free`) joined the live gateway recently — the first
+`step-5-preview`, `cat-jam-free`) joined the live gateway recently - the first
 two were protocol-verified against it directly, `cat-jam-free` is
-region-limited and taken from the documentation table — and their context
+region-limited and taken from the documentation table - and their context
 windows are conservative placeholders.
 
 The live `/models` response can change. Runtime refresh accepts only documented
@@ -185,7 +185,7 @@ the `/v1` prefix:
 |----------------|---------------------|-------------------|
 | `POST /v1/responses` | all 38 certified models + `gemini-4-argon-contributor` (needs `user-models.json` entry) | translated to each model's certified Responses, Chat Completions, Messages, or Google family |
 | `POST /v1/chat/completions` | the 23 Chat Completions models | relayed in Chat Completions format |
-| `POST /v1/messages` | all 38 certified models + `gemini-4-argon-contributor` (Claude Code surface) | the 9 Messages models relayed verbatim; the rest translated Anthropic → each model's certified family and back |
+| `POST /v1/messages` | all 38 certified models + `gemini-4-argon-contributor` (Claude Code surface) | the 9 Messages models relayed verbatim; the rest translated Anthropic -> each model's certified family and back |
 
 Streaming and non-streaming requests are supported on every row. The Responses
 aliases `/responses/compact` and `/v1/responses/compact` are also available for
@@ -215,28 +215,23 @@ The proxy routes the exact model Codex sends:
 3. A bare ID in the captured native catalog routes to the native OpenAI endpoint.
 4. A known, non-colliding bare Go ID remains a compatibility alias; a known
    Zen-only bare ID routes to Zen.
-5. An omitted model uses `deepseek-v4-flash`. An unknown or malformed model is
-   rejected before any upstream request; the proxy never silently substitutes
-   another model.
+5. A missing or malformed model is rejected with `400 model_not_found` before
+   any upstream request. The proxy has no default model and never substitutes
+   one: whatever the caller asked for is what reaches the upstream, and an
+   image turn whose model rejects images surfaces that upstream error instead
+   of being silently re-routed to a "cheaper vision model".
 
-When images are present in a turn with tools, the proxy captions the latest image
-(older ones are stubbed) and routes the main turn to your configured model. Image
-turns without tools stay on the requested model when the catalog marks it
-image-capable (`input_modalities` contains `image`); a text-only requested model
-falls back to the image default. If the upstream still rejects the image payload
-at runtime (400/404/415/422), the proxy captions the images and retries the
-requested model once before failing the turn. The caption
-engine auto-picks the cheapest image-capable model from the catalog (`input_modalities`
-contains image) with `mimo-v2.5` as the fallback, or a local vision runtime (Ollama,
-llama.cpp server, LM Studio) that answers a read-only probe. Captions are cached by
-image bytes for an hour, sent with `detail: low` to cut upstream vision cost, and every
-non-cached read is metered with `kind=vision`; the caption budget is 30s with no retries,
-so a failed caption degrades to a placeholder instead of stalling the turn. Override the
-engine with `CODEX_IMAGE_MODEL` or `OPENCODE_GO_PROXY_CAPTION_MODEL` (a model slug,
-`local`, or default `auto` = catalog pick); configure a local runtime with
-`OPENCODE_GO_PROXY_VISION_LOCAL_BASE_URL` / `OPENCODE_GO_PROXY_VISION_LOCAL_MODEL`.
-Disable `detail: low` with `OPENCODE_GO_PROXY_CAPTION_DETAIL=none` (a rejected detail
-value also falls back to a `sips`-downscaled image with no detail).
+### Request rewrites and their switches
+
+One rewrite is on by default and two are off; each rewrite emits a trace
+event when it fires, so none of them is ever silent.
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `OPENCODE_GO_PROXY_INJECT_SESSION_MODEL` | on | Fills a missing `model` in `create_thread` tool calls with the session model, so spawned threads do not fall back to the native backend this account cannot use. Set `0` for argument-level fidelity. |
+| `OPENCODE_GO_PROXY_MERGE_CODEX_APP_TOOLS` | off | Merges the snapshot `codex_app` tool definitions into requests that carry a `tools` array but no `codex_app` entries |
+| `OPENCODE_GO_PROXY_GEMINI_CONTINUE_TAIL` | on | Appends the trailing user text turn the Go Google gateway requires |
+
 
 ## OpenCode Zen
 
@@ -257,8 +252,8 @@ speaks to the surface the gateway expects:
 | `gpt-*`, `grok-*` | `/zen/v1/responses` (Responses API, verbatim) | `Authorization: Bearer` |
 | everything else | `/zen/v1/chat/completions` | `Authorization: Bearer` |
 
-The proxy resolves the same key as Go — `$OPENCODE_GO_API_KEY` or the macOS keychain
-entry `opencode-go-api-key` — and maps the auth header per family. Zen turns meter
+The proxy resolves the same key as Go - `$OPENCODE_GO_API_KEY` or the macOS keychain
+entry `opencode-go-api-key` - and maps the auth header per family. Zen turns meter
 with `provider="zen"`, so they never count against your Go quota.
 
 Free models need no credits: `deepseek-v4-flash-free`, `mimo-v2.5-free`, and
@@ -319,7 +314,7 @@ is never forwarded upstream.
 
 [lazycodex](https://github.com/code-yeongyu/oh-my-openagent) is a Codex plugin that adds
 multi-model orchestration, parallel background agents, and LSP/AST-aware tools. It pairs
-naturally with this proxy — you get OpenCode Go's models as the backend and lazycodex's
+naturally with this proxy - you get OpenCode Go's models as the backend and lazycodex's
 agent harness on top.
 
 ```bash
@@ -330,7 +325,7 @@ See the [lazycodex docs](https://github.com/code-yeongyu/oh-my-openagent) for se
 
 ## Features
 
-- Claude Code support: the `/v1/messages` surface serves every certified Go model — Messages-family models relay verbatim, Chat/Responses families translate both directions (request → Responses payload, reply → Anthropic blocks/SSE) — with the Anthropic error envelope, a `count_tokens` estimate, and `x-api-key` caller-token auth for LAN clients
+- Claude Code support: the `/v1/messages` surface serves every certified Go model - Messages-family models relay verbatim, Chat/Responses families translate both directions (request -> Responses payload, reply -> Anthropic blocks/SSE) - with the Anthropic error envelope, a `count_tokens` estimate, and `x-api-key` caller-token auth for LAN clients
 - OpenCode Zen support: auto-discovered `zen/<id>` catalog merged with models.dev metadata, per-family wire translation (Anthropic Messages / Gemini / Responses / chat-completions) with per-family auth header mapping, free models, and `provider="zen"` metering
 - Responses `input` to chat `messages` translation
 - `instructions` and `developer` roles mapped to system messages
@@ -338,7 +333,7 @@ See the [lazycodex docs](https://github.com/code-yeongyu/oh-my-openagent) for se
 - Custom/freeform tool adaptation (Codex `apply_patch` works)
 - Reasoning content replay across tool-call turns
 - Real-time SSE streaming (not synthesized)
-- Cached image captioning when tools are present: cheapest catalog vision engine (or a probed local runtime) by default, `detail: low` input, 30s no-retry budget, MiMo V2.5 fallback, reads metered with `kind=vision`
+- Image parts are forwarded to the requested model verbatim (data: and https: URLs only); no caption sub-calls and no model substitution
 - SSRF protection on image URLs (`data:image/` and `https://` only)
 - Configurable body cap, peer-address guard, authenticated remote mode, keychain credential resolution
 - Local health and model-list endpoints
@@ -348,9 +343,9 @@ See the [lazycodex docs](https://github.com/code-yeongyu/oh-my-openagent) for se
 - Terminal OpenCode Go usage-limit failures are normalized to OpenAI
   `insufficient_quota` and are not retried, so Codex stops instead of waiting
   for a multi-hour weekly-quota reset
-- Ops CLI: `doctor` (reference-style checks with `--fix` for safe repairs), `smoke-test` (marker prompt through the local proxy), `support-bundle` (JSON schema v1, mode 0600), `install` (points at the macOS menu bar app; no launchd agent), `install-skills`, `refresh-runtime`, and `status`
-- Spawned threads inherit the parent session's model (`create_thread`; `chatgptWorkCloud` targets are skipped)
-- Correctness contract: empty upstream completions are retried once (a second empty stream answers an `empty_completion` error), zero-input-token reports are estimated for compaction (`OPENCODE_GO_PROXY_ESTIMATE_ZERO_INPUT=0` disables), and keepalive comments run until the stream truly ends without interleaving into data frames
+- Ops CLI: `doctor` (reference-style checks with `--fix` for safe repairs), `smoke-test` (marker prompt through the local proxy; requires `--model <slug>`), `support-bundle` (JSON schema v1, mode 0600), `install` (points at the macOS menu bar app; no launchd agent), `install-skills`, `refresh-runtime`, and `status`
+- `create_thread` calls with no model inherit the session model (traced; `OPENCODE_GO_PROXY_INJECT_SESSION_MODEL=0` disables)
+- Correctness contract: empty upstream completions are retried once (a second empty stream answers an `empty_completion` error), provider usage numbers are forwarded untouched with an extra `estimatedInputTokens` hint for zero-input reports (`OPENCODE_GO_PROXY_ESTIMATE_ZERO_INPUT=0` disables the hint), an upstream `finish_reason` other than stop/tool_calls reports `status: incomplete`, and keepalive comments run until the stream truly ends without interleaving into data frames
 - Auth transport guard (zero config): the default listener and accepted peers are loopback-only, forged `Host: localhost` does not admit a remote peer, browser-originated requests answer `403`, non-JSON POSTs answer `415`, and OPTIONS preflight stays blocked
 - Family-aware Go routing for Responses, Chat Completions, and Anthropic
   Messages, including streaming and non-streaming requests with the
@@ -372,7 +367,7 @@ The proxy is built for exactly that:
 
 - The system prompt (`instructions` / `developer` roles) is always the first message.
 - Conversation history is appended in order; translation is deterministic, so the
-  serialized prefix is identical across requests in a session — and across sessions
+  serialized prefix is identical across requests in a session - and across sessions
   that share the same system prompt and tools.
 - Streaming requests set `stream_options: { "include_usage": true }` so the upstream
   reports its cache accounting (`prompt_cache_hit_tokens` / `cached_tokens`) in the
@@ -384,7 +379,7 @@ The proxy is built for exactly that:
 ### Checking the hit ratio
 
 Every request with cache accounting is logged (look for `"cache": {...}` on
-`response.converted` trace lines — a `debug`-level event, so run with
+`response.converted` trace lines - a `debug`-level event, so run with
 `OPENCODE_GO_PROXY_LOG_LEVEL=debug` first). The aggregate is also exposed on
 a metrics endpoint:
 
@@ -496,8 +491,8 @@ curl http://127.0.0.1:8787/state
 `usage.go` is the raw response of `GET https://opencode.ai/zen/go/v1/usage`
 (`rolling` / `weekly` / `monthly` windows), TTL-cached for 60s and `null` when
 the fetch fails. `usage.goLimits` holds the fixed Go dollar budgets the menu bar
-renders next to it. `usage.zen` is the Zen-only rollup — turns and tokens for
-today plus a seven-entry daily token list — from the local usage meter; the
+renders next to it. `usage.zen` is the Zen-only rollup - turns and tokens for
+today plus a seven-entry daily token list - from the local usage meter; the
 legacy `todayTurns` / `todayTokens` / `last7d` keys stay as the all-provider
 totals.
 
@@ -614,7 +609,7 @@ start/done) is `debug`; lifecycle milestones and rare routing decisions are
 `info`; handled failures and degradation (retries, timeouts, image or
 reasoning fallbacks) are `warn`; outright failures (handler crash,
 empty-stream exhaustion, refused start) are `error`. The minimum emitted
-level defaults to `info` (the proxy is under an active debugging period —
+level defaults to `info` (the proxy is under an active debugging period -
 `debug` adds the full per-request telemetry, and the intended steady-state
 default is `warn`, where a healthy proxy logs nothing per request). The
 start scripts expose a one-line switch (`LOG_LEVEL` in
@@ -677,7 +672,7 @@ provider credential. Browser-originated requests remain blocked in remote mode.
 `OPENCODE_GO_PROXY_PORT` (default `8787`). There is no admin port, control
 channel, or secondary service. The macOS menu bar app or the Linux systemd user
 unit supervises that one process. If something else already listens on the port,
-the proxy fails to bind — check with `lsof -nP -iTCP:8787 -sTCP:LISTEN` before
+the proxy fails to bind - check with `lsof -nP -iTCP:8787 -sTCP:LISTEN` before
 starting another instance. The menu bar app refuses Start when 8787 is owned.
 
 **Short provider name.** The long "opencode go/" label in the Codex model picker comes
@@ -710,7 +705,7 @@ All commands run as subcommands of the console script, for example `opencode-go-
   content), and Codex Voice realtime keys are preserved on native endpoints
   unless you set them yourself. Point it at another file for testing with
   `OPENCODE_GO_PROXY_CONFIG_PATH`.
-- `smoke-test [--base-url URL]` - posts one marker prompt to the local proxy at
+- `smoke-test --model <slug> [--base-url URL]` - posts one marker prompt to the local proxy at
   `http://127.0.0.1:8787/v1/responses` and asserts the marker comes back. Point
   it at an isolated scratch proxy with `--base-url` or `OPENCODE_GO_PROXY_BASE_URL`.
 - `support-bundle [--output PATH]` - writes the JSON schema v1 diagnostic bundle
@@ -757,7 +752,7 @@ model_catalog_json = "/absolute/path/to/.codex/model-catalogs/opencode-go.json"
 ```
 
 The catalog ships with the `ModelsCache` wrapper (`fetched_at`/`etag`/`client_version`/`models`).
-Codex 0.142+ desktop app requires all four top-level fields — a bare `{"models": [...]}` catalog
+Codex 0.142+ desktop app requires all four top-level fields - a bare `{"models": [...]}` catalog
 causes the model picker to fall back to "Custom" instead of showing the full list. The CLI
 (`codex debug models`) tolerates the bare format, so this only surfaces in the desktop app.
 
@@ -846,7 +841,7 @@ after two failed turns.
 OpenCode Go has 5-hour/weekly/monthly usage limits. Switch to a cheaper model (DeepSeek V4 Flash or MiMo V2.5) to stretch your quota. See [usage limits](https://opencode.ai/docs/go#usage-limits).
 
 **Streaming not working**
-Codex sends `stream: true` — the proxy handles this. If you see no SSE events, check stderr trace for `upstream.error` or `upstream.network_error`.
+Codex sends `stream: true` - the proxy handles this. If you see no SSE events, check stderr trace for `upstream.error` or `upstream.network_error`.
 
 **Codex says "model is not supported when using ChatGPT account"**
 Run `opencode-go-proxy config enable`, fully restart Codex, and confirm

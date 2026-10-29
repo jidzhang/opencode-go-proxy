@@ -49,8 +49,14 @@ echo ============================================
 echo.
 
 echo [1/8] Stopping any manual proxy on port 19999 ...
+rem Kill only listeners that are this repo's own venv proxy; an unrelated
+rem process on the port is reported and left alone.
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":19999" ^| findstr LISTENING') do (
-  taskkill /F /T /PID %%p >nul 2>&1
+  tasklist /fi "PID eq %%p" /fo csv /nh 2>nul | findstr /i "opencode-go-proxy" >nul 2>&1 && (
+    taskkill /F /T /PID %%p >nul 2>&1
+  ) || (
+    echo [install] port 19999 is held by a foreign process ^(PID %%p^); not killing it. >&2
+  )
 )
 timeout /t 2 /nobreak >nul 2>&1
 echo       done.

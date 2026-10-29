@@ -210,6 +210,13 @@ class TestDoctor:
 
 
 class TestSmoke:
+    def test_missing_model_is_refused(self, capsys) -> None:
+        # No baked-in default model: the operator must name one.
+        with mock.patch("opencode_go_proxy.ops.urllib.request.urlopen") as urlopen:
+            assert ops.smoke_test([]) == 2
+        assert not urlopen.called
+        assert "requires --model" in capsys.readouterr().out
+
     def test_ok(self) -> None:
         body = json.dumps({
             "model": "deepseek-v4-flash",
@@ -217,11 +224,11 @@ class TestSmoke:
             "output": [{"content": [{"text": ops.SMOKE_MARKER}]}],
         }).encode()
         with mock.patch("opencode_go_proxy.ops.urllib.request.urlopen", return_value=MockResp(body)):
-            assert ops.smoke_test() == 0
+            assert ops.smoke_test(["--model", "opencode-go/glm-5.2"]) == 0
 
     def test_http_error(self, capsys) -> None:
         with mock.patch("opencode_go_proxy.ops.urllib.request.urlopen", side_effect=_http_error(503, "proxy down")):
-            assert ops.smoke_test() == 1
+            assert ops.smoke_test(["--model", "opencode-go/glm-5.2"]) == 1
         out = capsys.readouterr().out
         assert "HTTP 503" in out
         assert "proxy down" in out
@@ -229,20 +236,20 @@ class TestSmoke:
     def test_proxy_unreachable(self, capsys) -> None:
         with mock.patch("opencode_go_proxy.ops.urllib.request.urlopen",
                         side_effect=urllib.error.URLError("refused")):
-            assert ops.smoke_test() == 1
+            assert ops.smoke_test(["--model", "opencode-go/glm-5.2"]) == 1
         assert "not reachable" in capsys.readouterr().out
 
     def test_marker_missing(self, capsys) -> None:
         body = json.dumps({"output_text": "wrong answer"}).encode()
         with mock.patch("opencode_go_proxy.ops.urllib.request.urlopen", return_value=MockResp(body)):
-            assert ops.smoke_test() == 1
+            assert ops.smoke_test(["--model", "opencode-go/glm-5.2"]) == 1
         assert "missing marker" in capsys.readouterr().out
 
     def test_custom_base_env(self) -> None:
         body = json.dumps({"output_text": ops.SMOKE_MARKER}).encode()
         with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_BASE_URL": "http://127.0.0.1:8790"}), \
              mock.patch("opencode_go_proxy.ops.urllib.request.urlopen", return_value=MockResp(body)) as urlopen:
-            assert ops.smoke_test() == 0
+            assert ops.smoke_test(["--model", "opencode-go/glm-5.2"]) == 0
         req = urlopen.call_args.args[0]
         assert req.full_url.startswith("http://127.0.0.1:8790/v1/responses")
         assert ("Content-type", "application/json") in req.header_items()
@@ -250,7 +257,7 @@ class TestSmoke:
     def test_base_url_flag(self) -> None:
         body = json.dumps({"output_text": ops.SMOKE_MARKER}).encode()
         with mock.patch("opencode_go_proxy.ops.urllib.request.urlopen", return_value=MockResp(body)) as urlopen:
-            assert ops.smoke_test(["--base-url", "http://127.0.0.1:9000/"]) == 0
+            assert ops.smoke_test(["--base-url", "http://127.0.0.1:9000/", "--model", "opencode-go/glm-5.2"]) == 0
         req = urlopen.call_args.args[0]
         assert req.full_url == "http://127.0.0.1:9000/v1/responses"
 
@@ -353,14 +360,12 @@ class TestPlatformServiceContract:
 
     def test_menu_bar_pin_matches_package_version(self) -> None:
         root = Path(__file__).parents[1]
-        version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
-            "project"
-        ]["version"]
         controller = (
             root
             / "macos/MenuBarApp/Sources/OpenCodeGoMenuBar/ProxyController.swift"
         ).read_text(encoding="utf-8")
-        assert f"opencode-go-proxy@v{version}" in controller
+        assert "git+https://github.com/jidzhang/opencode-go-proxy" in controller
+        assert "kartikkabadi" not in controller
         assert not (root / "contrib/launchd").exists()
 
 

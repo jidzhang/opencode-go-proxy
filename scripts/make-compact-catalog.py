@@ -20,23 +20,38 @@ CLIENT_VERSION = "0.147.0"
 # the compact form never stores it (the same rule as _default_model_record).
 DROPPED_KEYS = frozenset({"base_instructions", "model_messages", "auto_compact_token_limit"})
 
+# Client-contract values the Codex catalog shape needs but the upstream does not
+# publish. They are only supplied when the source record omits the key: an
+# explicit value in the full catalog always wins, so regenerating never flips a
+# deliberate "hide" back to "list" or clears a real capability.
+FILL_IF_ABSENT = {
+    "effective_context_window_percent": 95,
+    "apply_patch_tool_type": "freeform",
+    "shell_type": "shell_command",
+    "visibility": "list",
+    "supported_in_api": True,
+    "additional_speed_tiers": [],
+    "service_tiers": [],
+    "availability_nux": None,
+    "upgrade": None,
+    "support_verbosity": False,
+    "default_verbosity": "low",
+    "experimental_supported_tools": [],
+    "use_responses_lite": False,
+}
+
 
 def compact_model(full_model: dict) -> dict:
-    """Return one compact model record without per-model instruction fields."""
+    """Project one full-shape model to the compact form.
+
+    Only two things happen: per-model instruction fields are dropped (they live
+    once in ``shared_instructions``), and client-contract keys the record does
+    not carry get their documented default. Nothing already present is
+    overwritten.
+    """
     record = {key: value for key, value in full_model.items() if key not in DROPPED_KEYS}
-    record["effective_context_window_percent"] = 95
-    record["apply_patch_tool_type"] = "freeform"
-    record["shell_type"] = "shell_command"
-    record["visibility"] = "list"
-    record["supported_in_api"] = True
-    record["additional_speed_tiers"] = []
-    record["service_tiers"] = []
-    record["availability_nux"] = None
-    record["upgrade"] = None
-    record["support_verbosity"] = False
-    record["default_verbosity"] = "low"
-    record["experimental_supported_tools"] = []
-    record["use_responses_lite"] = False
+    for key, default in FILL_IF_ABSENT.items():
+        record.setdefault(key, default)
     return record
 
 
@@ -46,12 +61,24 @@ def main() -> None:
     models = full.get("models")
     if not models:
         raise SystemExit(f"{FULL_PATH} contains no models")
-    shared_instructions = models[0]["base_instructions"]
+
+    # One shared instruction blob for every model is only correct when the
+    # source actually shares it; assert that instead of silently handing model
+    # A's prompt to model B.
+    shared = models[0].get("base_instructions") or ""
+    divergent = [
+        m.get("slug") for m in models[1:] if (m.get("base_instructions") or "") != shared
+    ]
+    if divergent:
+        raise SystemExit(
+            "models carry different base_instructions; the compact form keeps one "
+            f"shared blob, so this catalog cannot be compacted safely: {divergent[:5]}"
+        )
 
     compact = {
         "fetched_at": full["fetched_at"],
         "etag": full["etag"],
-        "shared_instructions": shared_instructions,
+        "shared_instructions": shared,
         "client_version": CLIENT_VERSION,
         "models": [compact_model(model) for model in models],
     }

@@ -247,7 +247,7 @@ def _get(port: int, path: str) -> SimpleNamespace:
 
 def test_native_relays_verbatim_with_client_auth_only(backend: str, proxy_server: int, offline_env) -> None:
     """(a) A bare native model relays to the native backend with the client's
-    own Authorization header and nothing else — the go key never appears."""
+    own Authorization header and nothing else - the go key never appears."""
     _seed_native_capture("gpt-5.6-terra")
     payload = {"model": "gpt-5.6-terra", "input": "hi", "stream": False}
     resp = _post(proxy_server, payload, auth=CLIENT_AUTH)

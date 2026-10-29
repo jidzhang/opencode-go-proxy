@@ -14,10 +14,8 @@ from opencode_go_proxy.protocol import (
     drop_reasoning_items,
     expired_reasoning_reference,
     maybe_detox_payload,
-    reasoning_detox_enabled,
 )
 from opencode_go_proxy.streaming import _ConnectFailed
-
 
 EXPIRED = ("Referenced reasoning item 'rs_033d0a4cae9d4a8a8ccad0e3f45ed970' "
            "was not found or has expired.")
@@ -212,7 +210,6 @@ class TestStreamDetox:
 
         def fake_relay(handler, config, request_id, **kwargs):
             relayed["response"] = kwargs.get("response")
-            return None
 
         handler = FakeHandler()
         payload = _payload()

@@ -50,7 +50,7 @@ final class UpdateSupportTests: XCTestCase {
          "model":"gpt-5.2-codex",
          "version":"0.4.7",
          "update":{"available":true,"latest":"0.4.8",
-                   "release_url":"https://github.com/kartikkabadi/opencode-go-proxy/releases/tag/v0.4.8",
+                   "release_url":"https://github.com/jidzhang/opencode-go-proxy/releases/tag/v0.4.8",
                    "checked_at":"2026-08-14T12:00:00Z","error":null}}
         """
         let decoded = try decodeState(newState)
@@ -58,7 +58,7 @@ final class UpdateSupportTests: XCTestCase {
         XCTAssertEqual(decoded.update?.available, true)
         XCTAssertEqual(decoded.update?.latest, "0.4.8")
         XCTAssertEqual(decoded.update?.releaseUrl,
-                       "https://github.com/kartikkabadi/opencode-go-proxy/releases/tag/v0.4.8")
+                       "https://github.com/jidzhang/opencode-go-proxy/releases/tag/v0.4.8")
         XCTAssertEqual(decoded.update?.checkedAt, "2026-08-14T12:00:00Z")
         XCTAssertNil(decoded.update?.error)
     }
@@ -80,28 +80,28 @@ final class UpdateSupportTests: XCTestCase {
 
     func testDefaultsOverrideBeatsCompiledPin() {
         let defaults = freshDefaults()
-        XCTAssertEqual(ProxySourceResolver.resolve(defaults: defaults, fallbackProxySource: ProxySourceResolver.compiledSource),
-                       ProxySourceResolver.compiledSource)
-        defaults.set("git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.8",
+        XCTAssertEqual(ProxySourceResolver.resolve(defaults: defaults, fallbackProxySource: ProxySourceResolver.fallbackProxySource),
+                       ProxySourceResolver.fallbackProxySource)
+        defaults.set("git+https://github.com/jidzhang/opencode-go-proxy@v0.4.8",
                      forKey: ProxySourceResolver.defaultsKey)
-        XCTAssertEqual(ProxySourceResolver.resolve(defaults: defaults, fallbackProxySource: ProxySourceResolver.compiledSource),
-                       "git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.8")
+        XCTAssertEqual(ProxySourceResolver.resolve(defaults: defaults, fallbackProxySource: ProxySourceResolver.fallbackProxySource),
+                       "git+https://github.com/jidzhang/opencode-go-proxy@v0.4.8")
     }
 
     func testEmptyDefaultsValueFallsBackToCompiledPin() {
         let defaults = freshDefaults()
         defaults.set("", forKey: ProxySourceResolver.defaultsKey)
-        XCTAssertEqual(ProxySourceResolver.resolve(defaults: defaults, fallbackProxySource: ProxySourceResolver.compiledSource),
-                       ProxySourceResolver.compiledSource)
+        XCTAssertEqual(ProxySourceResolver.resolve(defaults: defaults, fallbackProxySource: ProxySourceResolver.fallbackProxySource),
+                       ProxySourceResolver.fallbackProxySource)
     }
 
     func testPinBuilderAndTagParser() {
         XCTAssertEqual(ProxySourceResolver.source(pinning: "0.4.8"),
-                       "git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.8")
+                       "git+https://github.com/jidzhang/opencode-go-proxy@v0.4.8")
         XCTAssertEqual(ProxySourceResolver.source(pinning: "v0.4.8"),
-                       "git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.8")
-        XCTAssertEqual(ProxySourceResolver.pinTag(from: "git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.8"),
+                       "git+https://github.com/jidzhang/opencode-go-proxy@v0.4.8")
+        XCTAssertEqual(ProxySourceResolver.pinTag(from: "git+https://github.com/jidzhang/opencode-go-proxy@v0.4.8"),
                        "v0.4.8")
-        XCTAssertNil(ProxySourceResolver.pinTag(from: "git+https://github.com/kartikkabadi/opencode-go-proxy"))
+        XCTAssertNil(ProxySourceResolver.pinTag(from: "git+https://github.com/jidzhang/opencode-go-proxy"))
     }
 }

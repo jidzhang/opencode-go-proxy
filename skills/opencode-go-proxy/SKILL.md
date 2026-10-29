@@ -8,9 +8,9 @@ description: Orientation for using the opencode-go-proxy bridge, which lets the 
 The proxy bridges Codex's Responses API and Claude Code's Anthropic Messages API to OpenCode Go's per-model wire protocols (Chat Completions, Responses, Anthropic Messages) in one local process on port 8787. It has one runtime dependency (zstandard); the rest is stdlib. It is single-provider and single-port.
 
 ```text
-Codex app     -> POST /v1/responses  ─┐
-Claude Code   -> POST /v1/messages   ─┤-> opencode-go-proxy (127.0.0.1:8787)
-                                       └-> POST per family -> OpenCode Go
+Codex app     -> POST /v1/responses  -+
+Claude Code   -> POST /v1/messages   -+-> opencode-go-proxy (127.0.0.1:8787)
+                                       +-> POST per family -> OpenCode Go
 ```
 
 ## Start and stop
@@ -22,15 +22,15 @@ Claude Code   -> POST /v1/messages   ─┤-> opencode-go-proxy (127.0.0.1:8787)
 ## Operational commands
 
 - `opencode-go-proxy doctor` - read-only self-check (API key present, /health 200, meter writable, logs present, Codex config points at the proxy). `--json` for machine output; non-zero exit on any failure.
-- `opencode-go-proxy smoke-test` - one tiny real chat-completion to upstream; non-zero on failure.
-- `opencode-go-proxy support-bundle [--output FILE]` - tarball of version, logs, meter, and redacted config (secret values masked, never bundled raw).
+- `opencode-go-proxy smoke-test --model <slug>` - one marker prompt through the local proxy; non-zero on failure.
+- `opencode-go-proxy support-bundle [--output FILE]` - one JSON document (schema v1, mode 0600) with version, log tails, meter tail, and redacted config; secret values masked, never bundled raw.
 - `opencode-go-proxy agents-sync` - writes one Codex agent TOML per opencode-go model into ~/.codex/agents (`router_opencode_go_<slug>`) so subagents use the same models; removes agent files this proxy wrote whose model left the catalog.
 - `opencode-go-proxy install-skills [--dry-run]` - copies this skill into ~/.codex/skills/opencode-go-proxy/.
 - `opencode-go-proxy --refresh-catalog` - refresh the model catalog from models.dev.
 
 ## Models: native and opencode-go
 
-The merged model catalog lists both kinds. Models like `gpt-*` and `o*` are native: the proxy passes those requests straight through to the ChatGPT backend (your Codex login), never aliasing them to an OpenCode Go model. `opencode-go/*` models route through the proxy to OpenCode Go. An unknown slug falls back to the default opencode-go model.
+The merged model catalog lists both kinds. Models like `gpt-*` and `o*` are native: the proxy passes those requests straight through to the ChatGPT backend (your Codex login), never aliasing them to an OpenCode Go model. `opencode-go/*` models route through the proxy to OpenCode Go. A missing or unknown slug is rejected with `400 model_not_found`; the proxy has no default model and never substitutes one.
 
 ## Claude Code
 
@@ -58,4 +58,4 @@ Resolved in order: `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY`, then macOS keychai
 ## Config
 
 - `opencode-go-proxy config enable` writes one managed block into `~/.codex/config.toml`: `openai_base_url` (the proxy), `model_catalog_json` (the merged native + opencode-go catalog in the state dir), the `multi_agent_v2` feature (only when the installed codex binary accepts it), and an inert `[model_providers.opencode-go]` block (`base_url` 8787, `wire_api` "responses"). User-owned keys are never replaced; `config disable` removes the block.
-- Bind is guarded: the proxy emits a trace-log warning when bound outside localhost (e.g. `--bind 0.0.0.0`). It does not refuse to start.
+- Bind is guarded: a non-loopback bind refuses to start unless `OPENCODE_GO_PROXY_ALLOW_REMOTE=1` is set and `OPENCODE_GO_PROXY_CALLER_TOKEN` has at least 32 characters; every remote client must then present that token.

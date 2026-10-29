@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/kartikkabadi/opencode-go-proxy.git
+git clone https://github.com/jidzhang/opencode-go-proxy.git
 cd opencode-go-proxy
 uv sync
 ```
@@ -23,7 +23,7 @@ uv build
 
 ## Code style
 
-- Python 3.11+, stdlib only (no dependencies).
+- Python 3.11+. Stdlib only except `zstandard` (Codex desktop sends zstd-compressed request bodies).
 - Compact code. Delete before adding. One line before fifty.
 - Match existing style in `app.py` and `protocol.py`.
 - Trace every network call with the `trace()` function.
@@ -33,7 +33,7 @@ uv build
 1. Fork and branch from `main`.
 2. Write tests for new behavior.
 3. Ensure `pytest tests -v` and `ruff check` pass.
-4. Keep diffs minimal — surgical changes only.
+4. Keep diffs minimal - surgical changes only.
 5. Reference issues in your PR description.
 
 ## Reporting issues
@@ -42,7 +42,7 @@ Include:
 - Codex version (`codex --version`)
 - Proxy version (`opencode-go-proxy --version`)
 - Upstream provider (OpenCode Go, or custom `CHAT_COMPLETIONS_BASE_URL`)
-- Trace output (stderr JSON lines — redact API keys first)
+- Trace output (stderr JSON lines - redact API keys first)
 - Minimal repro steps
 
 ## Security

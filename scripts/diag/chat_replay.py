@@ -8,6 +8,8 @@ Distinguishes message-shape failures from tools/instructions failures.
 Usage:
   chat_replay.py ROLLOUT [ORD_CAP] [--model SLUG] [--port N] [--timeout SECS]
 """
+
+# ruff: noqa: E402 - path setup precedes the sibling import
 from __future__ import annotations
 
 import argparse
@@ -22,7 +24,7 @@ sys.path.insert(0, SCRIPT_DIR)
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
-from replay_turn import load_items  # noqa: E402
+from replay_turn import load_items
 
 
 def main(argv: list) -> int:

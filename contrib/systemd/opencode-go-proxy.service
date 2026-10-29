@@ -1,6 +1,6 @@
 [Unit]
 Description=OpenCode Go proxy for Codex
-Documentation=https://github.com/kartikkabadi/opencode-go-proxy
+Documentation=https://github.com/jidzhang/opencode-go-proxy
 After=network-online.target
 Wants=network-online.target
 
@@ -10,7 +10,9 @@ Environment=HOME=%h
 Environment=PATH=%h/.local/bin:%h/.cargo/bin:%h/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
 Environment=CODEX_MODEL_CATALOG=%h/.codex/opencode-go-proxy/opencode-go-catalog.json
-ExecStart=/usr/bin/env uvx --from git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.10 opencode-go-proxy --bind 127.0.0.1 --port 8787 --chat-base-url https://opencode.ai/zen/go/v1
+# No --chat-base-url: the proxy resolves OPENCODE_GO_BASE_URL and its own
+# documented chain, so an operator's configured upstream always wins.
+ExecStart=/usr/bin/env uvx --from git+https://github.com/jidzhang/opencode-go-proxy@v0.4.10 opencode-go-proxy --bind 127.0.0.1 --port 8787
 Restart=on-failure
 RestartSec=3
 

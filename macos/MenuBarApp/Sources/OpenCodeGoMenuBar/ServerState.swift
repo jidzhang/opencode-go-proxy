@@ -145,7 +145,7 @@ enum VersionFetcher {
 }
 
 /// GET /v1/models count on the local proxy; completion(nil) on any failure so
-/// the menu shows "—" instead of a stale number.
+/// the menu shows "-" instead of a stale number.
 enum CatalogFetcher {
     private struct ModelList: Decodable {
         let data: [ModelRef]

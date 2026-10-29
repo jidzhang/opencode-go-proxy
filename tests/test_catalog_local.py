@@ -70,7 +70,8 @@ class TestApplyUserModels:
         by_slug = {m["slug"]: m for m in models}
         assert by_slug["curated-flash"]["display_name"] == "Curated Flash"
         assert by_slug["curated-flash"]["context_window"] == 200000
-        assert by_slug["curated-flash"]["max_context_window"] == 1000000  # default
+        # Unknown stays unknown: no fabricated 1M window for an unmeasured model.
+        assert by_slug["curated-flash"]["max_context_window"] is None
         assert by_slug["curated-flash"]["multi_agent_version"] == "v2"  # default
         assert len(models) == 3
 

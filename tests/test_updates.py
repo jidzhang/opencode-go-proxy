@@ -11,7 +11,7 @@ from opencode_go_proxy import __version__, updates
 _v = [int(x) for x in __version__.split(".")]
 _NEWER = f"{_v[0]}.{_v[1]}.{_v[2] + 1}"
 _NEWER_TAG = f"v{_NEWER}"
-RELEASE_URL = f"https://github.com/kartikkabadi/opencode-go-proxy/releases/tag/{_NEWER_TAG}"
+RELEASE_URL = f"https://github.com/jidzhang/opencode-go-proxy/releases/tag/{_NEWER_TAG}"
 
 
 class MockResp:
@@ -82,7 +82,7 @@ class TestCheckForUpdates:
              mock.patch(_urlopen_path(), return_value=_release(_NEWER_TAG)) as urlopen:
             updates.check_for_updates(force=True)
         request = urlopen.call_args.args[0]
-        assert request.full_url == "https://api.example.test/repos/kartikkabadi/opencode-go-proxy/releases/latest"
+        assert request.full_url == "https://api.example.test/repos/jidzhang/opencode-go-proxy/releases/latest"
         assert request.headers.get("User-agent") == f"opencode-go-proxy/{__version__}"
 
 
@@ -141,7 +141,7 @@ class TestErrorPaths:
         import io
 
         error = urllib.error.HTTPError(
-            "https://api.github.com/repos/kartikkabadi/opencode-go-proxy/releases/latest",
+            "https://api.github.com/repos/jidzhang/opencode-go-proxy/releases/latest",
             403, "rate limited", {}, io.BytesIO(b"")
         )
         with mock.patch(_urlopen_path(), side_effect=error):

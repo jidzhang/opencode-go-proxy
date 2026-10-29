@@ -253,22 +253,21 @@ class ColdStartRenderTests(unittest.TestCase):
         self.assertNotIn("auto_compact_token_limit", messages)
         self.assertNotIn("multi_agent_version", messages)
 
-    def test_discovery_without_limit_context_keeps_default(self) -> None:
+    def test_discovery_without_limit_context_leaves_window_unknown(self) -> None:
+        # The upstream published no window; the proxy must not assert one.
         record = _model_from_discovery({"id": "no-context-model", "name": "No Context"})
 
-        self.assertEqual(record["context_window"], 1000000)
-        self.assertEqual(record["max_context_window"], 1000000)
+        self.assertIsNone(record["context_window"])
+        self.assertIsNone(record["max_context_window"])
 
-    def test_render_with_default_context_window_does_not_crash(self) -> None:
+    def test_render_without_context_window_emits_no_compaction_budget(self) -> None:
         discovered = _model_from_discovery({"id": "no-context-model", "name": "No Context"})
         compact = minimal_compact("Line one\n", discovered)
 
         rendered = render_full_catalog(compact)
 
-        self.assertEqual(
-            rendered["models"][0]["auto_compact_token_limit"],
-            round(1000000 * 0.9),
-        )
+        self.assertIsNone(rendered["models"][0]["auto_compact_token_limit"])
+        self.assertIsNone(rendered["models"][0]["context_window"])
         self.assertEqual(rendered["models"][0]["multi_agent_version"], "v2")
 
 

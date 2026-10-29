@@ -1,7 +1,7 @@
 # Publishing
 
 This repository is published on GitHub as
-`kartikkabadi/opencode-go-proxy`.
+`jidzhang/opencode-go-proxy`.
 
 ## Release surface
 
@@ -16,7 +16,7 @@ This repository is published on GitHub as
 ## Install
 
 ```bash
-uvx --from git+https://github.com/kartikkabadi/opencode-go-proxy opencode-go-proxy
+uvx --from git+https://github.com/jidzhang/opencode-go-proxy opencode-go-proxy
 ```
 
 No PyPI, no AUR. `uvx` from git is the only install path.

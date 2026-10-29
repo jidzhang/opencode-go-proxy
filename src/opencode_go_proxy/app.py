@@ -1,7 +1,7 @@
 """Thin HTTP dispatch for the Responses-API shim.
 
 Route handling and request plumbing live here; secrets, the upstream client,
-the SSE streaming engine, and vision captions live in their own modules.
+and the per-family translation paths live in their own modules.
 """
 
 from __future__ import annotations
@@ -46,33 +46,13 @@ from .guards import (
     check_host,
     validate_bind_security,
 )
-from .meter import (
-    DEFAULT_ESTIMATE_CONTEXT_WINDOW,
-    estimate_input_tokens,
-    record_usage_event,
-)
 from .passthrough import relay_native_request
-from .protocol import (
-    DEFAULT_MODEL,
-    cache_stats_from_usage,
-    chat_completion_to_response,
-    inject_session_model,
-    known_models,
-    model_context_window,
-    responses_payload_to_chat_payload,
-)
+from .protocol import known_models
 from .quota import read_quota_state
-from .routing import OPENCODE_GO_PREFIX, is_known_model_slug, route_target
+from .routing import is_known_model_slug, route_target
 from .state import build_state
 from .trace import trace
-from .upstream import (
-    call_upstream_chat,
-    record_cache,
-    usage_tokens,
-)
-from .zen_catalog import ZEN_PREFIX, zen_model_ids
 from .zen_upstream import (
-    call_zen_responses,
     handle_zen_chat_request,
     handle_zen_responses_request,
 )
@@ -237,7 +217,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         buffer turns the close into an RST, and on Windows that RST can
         discard the already-queued response before the client reads it
         (observed as WinError 10053 instead of the status code). Drain only
-        what has actually arrived — never waiting for a declared-but-unsent
+        what has actually arrived - never waiting for a declared-but-unsent
         remainder (an oversized-body rejection must answer immediately), and
         stop as soon as no more data is instantly available. Bytes already
         buffered in ``rfile`` are already off the kernel buffer and cannot
@@ -276,8 +256,6 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
     @staticmethod
     def _request_model(payload: Json) -> str:
         raw_model = payload.get("model")
-        if raw_model is None:
-            return DEFAULT_MODEL
         if not isinstance(raw_model, str) or not raw_model:
             raise ProxyError(
                 HTTPStatus.BAD_REQUEST,
@@ -399,9 +377,10 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
             # v2: a responses request whose input ends in a compaction trigger
             # item). Native models fall through to the ChatGPT backend relay,
             # which handles compaction itself.
-            if path in COMPACT_PATHS or (
+            is_compaction = (path in COMPACT_PATHS) or (
                 path in RESPONSES_PATHS and has_compaction_trigger(payload)
-            ) and route_target(model) != "native":
+            )
+            if is_compaction and route_target(model) != "native":
                 handle_compaction(self, payload, config, request_id, path=path)
                 return
             if path in MESSAGES_PATHS:
@@ -484,166 +463,6 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
 
-def is_go_not_supported_rejection(model: str, status: int | None, body: bytes | str | None) -> bool:
-    """True when the go gateway rejected a bare slug with its ModelError
-    "not supported" shape — the raw rejection, single-sourced here.
-
-    Fires only for bare slugs (no provider prefix), only on the gateway's own
-    not-supported rejection (401/403), and only when the body parses to
-    ``{"error": {"type": "ModelError", "message": "... not supported ..."}}``
-    (the shape seen live; whitespace-tolerant). Catalog membership is left to
-    callers: the zen fallback and the hide tracker each apply their own gate.
-    """
-    if not model or model.startswith((OPENCODE_GO_PREFIX, ZEN_PREFIX)):
-        return False
-    if status not in (401, 403):
-        return False
-    if not body:
-        return False
-    if isinstance(body, bytes):
-        text = body.decode("utf-8", errors="replace")
-    else:
-        text = body
-    try:
-        value = json.loads(text)
-    except (ValueError, TypeError):
-        return False
-    if not isinstance(value, dict):
-        return False
-    error = value.get("error")
-    if not isinstance(error, dict):
-        return False
-    if error.get("type") != "ModelError":
-        return False
-    message = error.get("message")
-    if not isinstance(message, str):
-        return False
-    return "not supported" in " ".join(message.split()).lower()
-
-
-def _go_reject_zen_fallback(model: str, status: int | None, body: bytes | str | None) -> bool:
-    """True when the go gateway rejected a bare slug with its ModelError
-    "not supported" shape — the one rejection the proxy answers by re-dispatching
-    the identical request to the zen path.
-
-    The raw rejection (is_go_not_supported_rejection) plus a zen-owned bare
-    slug: the go-wins contract for bare collisions stands for ids the go
-    gateway actually serves, so only zen-owned ids fall back.
-    """
-    return is_go_not_supported_rejection(model, status, body) and model in zen_model_ids()
-
-
-# Proxy-lifetime strikes for bare go slugs the gateway rejects with its
-# ModelError "not supported" envelope. Two rejections hide the slug in the
-# picker (model-picker.json + one merged re-render); a successful go turn
-# clears the strike and restores a slug this process auto-hid.
-_unsupported_strikes: dict[str, int] = {}
-_auto_hidden: set[str] = set()
-
-
-def record_go_unsupported(slug: str) -> None:
-    """Record one go gateway "not supported" rejection for a bare go slug.
-
-    Only bare slugs the zen catalog does not own and the opencode-go catalog
-    advertises are counted: prefixed slugs route by explicit choice, zen-owned
-    ids are served through the zen fallback, and native/junk slugs are never
-    go-catalog entries — none of those may be hidden. On the second rejection
-    the slug is hidden in the picker and the merged catalog re-rendered once.
-    """
-    if not slug or slug.startswith((OPENCODE_GO_PREFIX, ZEN_PREFIX)):
-        return
-    if slug in zen_model_ids() or slug not in known_models():
-        return
-    strikes = _unsupported_strikes.get(slug, 0) + 1
-    _unsupported_strikes[slug] = strikes
-    if strikes >= 2:
-        from opencode_go_proxy import catalog as _catalog
-
-        if _catalog.hide_model_from_picker(slug):
-            _auto_hidden.add(slug)
-        trace("catalog.hide_unsupported", level="info", slug=slug, strikes=strikes)
-
-
-def clear_go_unsupported(slug: str) -> None:
-    """A successful go turn proves the slug is served: clear its strike and
-    restore the slug when this process auto-hid it (model-picker.json write +
-    one merged re-render). Manual hides are left untouched."""
-    if not slug:
-        return
-    _unsupported_strikes.pop(slug, None)
-    if slug in _auto_hidden:
-        from opencode_go_proxy import catalog as _catalog
-
-        _auto_hidden.discard(slug)
-        _catalog.unhide_model_from_picker(slug)
-
-
-def handle_responses_request(payload: Json, config: ProxyConfig, request_id: str) -> Json:
-    started = time.time()
-    session_model = payload.get("model") or DEFAULT_MODEL
-    if route_target(session_model) == "zen":
-        # Zen models never enter the opencode-go translation path: the zen
-        # client translates per wire family (and meters provider="zen").
-        return call_zen_responses(payload, config, request_id)
-    # The go-reject fallback re-dispatches the ORIGINAL parsed body (pre
-    # session-injection) to zen; keep it before inject_session_model rebinds.
-    original_payload = payload
-    payload = inject_session_model(payload, session_model)
-    chat_payload, request_model, conversion_stats = responses_payload_to_chat_payload(payload)
-
-    trace(
-        "request.converted", level="debug",
-        request_id=request_id,
-        stats=conversion_stats,
-        upstream_model=chat_payload.get("model"),
-    )
-    try:
-        chat, retries = call_upstream_chat(chat_payload, config, request_id)
-    except ProxyError as exc:
-        status = exc.upstream_status if exc.upstream_status is not None else int(exc.status)
-        if _go_reject_zen_fallback(session_model, status, exc.body):
-            # The go gateway advertises this bare slug but does not serve
-            # it (ModelError "not supported"); zen owns it. Re-dispatch
-            # the identical original body to the zen path, which
-            # translates per wire family; the zen result/error envelope
-            # becomes the response.
-            trace("fallback.go_reject_zen", level="info", request_id=request_id, model=session_model,
-                  status=status, path="responses")
-            return call_zen_responses(original_payload, config, request_id)
-        elif is_go_not_supported_rejection(session_model, status, exc.body):
-            # The go catalog advertises this bare slug but the gateway does
-            # not serve it and zen does not own it: count the rejection so
-            # the picker self-cleans after two strikes.
-            record_go_unsupported(session_model)
-        record_usage_event(
-            model=request_model, status=int(exc.status), duration_ms=int((time.time() - started) * 1000),
-            retries=exc.retries or None,
-        )
-        raise
-    clear_go_unsupported(request_model)
-    record_cache(config.cache_tracker, chat_payload.get("model"), chat.get("usage"))
-    context_cap = model_context_window(request_model) or DEFAULT_ESTIMATE_CONTEXT_WINDOW
-    prompt_bytes = len(json.dumps(chat_payload, separators=(",", ":")).encode("utf-8"))
-    estimated = estimate_input_tokens(request_model, prompt_bytes, chat.get("usage"), context_window=context_cap)
-    response = chat_completion_to_response(chat, request_model=request_model, estimated_input_tokens=estimated)
-    trace(
-        "response.converted", level="debug",
-        request_id=request_id,
-        output_items=len(response.get("output", [])),
-        output_text_len=len(response.get("output_text", "")),
-        usage=response.get("usage"),
-        cache=cache_stats_from_usage(chat.get("usage")),
-    )
-    inp, outp, total = usage_tokens(chat.get("usage"))
-    record_usage_event(
-        model=request_model, status=200, duration_ms=int((time.time() - started) * 1000),
-        input_tokens=inp, output_tokens=outp, total_tokens=total,
-        estimated_input_tokens=estimated,
-        retries=retries,
-    )
-    return response
-
-
 def handle_chat_completions_request(handler: ResponsesProxyHandler, payload: Json, config: ProxyConfig, request_id: str) -> None:
     """Verbatim /chat/completions passthrough for both stream modes.
 
@@ -653,7 +472,7 @@ def handle_chat_completions_request(handler: ResponsesProxyHandler, payload: Jso
     unchanged. A missing key surfaces the same 401 proxy error the responses
     path uses.
     """
-    if route_target(payload.get("model") or DEFAULT_MODEL) == "zen":
+    if route_target(payload.get("model") or "") == "zen":
         # Zen models relay to the zen chat-completions surface with the zen
         # key and base; the opencode-go upstream is never involved.
         handle_zen_chat_request(handler, payload, config, request_id)

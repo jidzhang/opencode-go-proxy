@@ -1,14 +1,12 @@
 """Plan 011 quota harvesting: header parsing, persistence, /quota endpoint."""
 
 import datetime
-import io
 import json
 import os
 import socket
 import threading
 from http.client import HTTPConnection, HTTPMessage
 from http.server import ThreadingHTTPServer
-from typing import ClassVar
 from unittest import mock
 
 import pytest
@@ -20,7 +18,6 @@ from opencode_go_proxy.quota import (
     read_quota_state,
     record_quota_from_headers,
 )
-from opencode_go_proxy.upstream import call_upstream_chat, call_upstream_chat_verbatim
 
 
 def make_config() -> ProxyConfig:
@@ -249,52 +246,6 @@ def ok_response(headers: dict | None = None) -> mock.Mock:
     raw = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode("utf-8")
     return mock.Mock(status=200, headers=headers or {}, read=lambda: raw,
                      __enter__=lambda s: s, __exit__=lambda *a: False)
-
-
-class TestUpstreamHooks:
-    def test_call_upstream_chat_records_quota(self) -> None:
-        headers = {"x-ratelimit-limit-requests": "500", "x-ratelimit-remaining-requests": "432"}
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", return_value=ok_response(headers)):
-            _value, retries = call_upstream_chat(chat_payload(), make_config(), "req")
-        assert retries == 0
-        assert read_quota_state()["providers"]["openai"]["remaining"] == 432
-
-    def test_call_upstream_chat_verbatim_records_quota(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", return_value=ok_response({"x-ratelimit-remaining": "7"})):
-            status, _body, _retries, _ct, _retry_after = call_upstream_chat_verbatim(chat_payload(), make_config(), "req")
-        assert status == 200
-        assert read_quota_state()["providers"]["openai"]["remaining"] == 7
-
-    def test_streaming_records_quota(self) -> None:
-        from opencode_go_proxy.streaming import handle_streaming_request
-
-        class FakeStream:
-            status: ClassVar[int] = 200
-            headers: ClassVar[dict[str, str]] = {"x-ratelimit-limit-requests": "500", "x-ratelimit-remaining-requests": "88"}
-            lines: ClassVar[list[bytes]] = [
-                b'data: {"id":"1","choices":[{"index":0,"delta":{"content":"hi"}}]}\n',
-                b'data: {"id":"1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n',
-                b"data: [DONE]\n",
-            ]
-
-            def __iter__(self):
-                return iter(self.lines)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args: object) -> bool:
-                return False
-
-        wfile = io.BytesIO()
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", return_value=FakeStream()):
-            handle_streaming_request(
-                {"model": "deepseek-v4-flash", "input": "hi", "stream": True}, make_config(), "req-stream", wfile
-            )
-        assert read_quota_state()["providers"]["openai"]["remaining"] == 88
 
 
 @pytest.fixture

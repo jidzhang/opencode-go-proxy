@@ -1,13 +1,13 @@
-"""Anthropic Messages client surface: Claude Code → any certified Go family.
+"""Anthropic Messages client surface: Claude Code -> any certified Go family.
 
 Claude Code speaks the Anthropic Messages protocol (``POST /v1/messages``).
 Messages-family Go models keep the existing byte-verbatim relay; Chat- and
 Responses-family models are served by translating both directions here:
 
-- Request → Responses payload, reusing the family dispatch's retry, metering,
+- Request -> Responses payload, reusing the family dispatch's retry, metering,
   prefix caching, image captioning, and dangling-call cleanup.
-- The Responses result — object or SSE event sequence — back to the Anthropic
-  Message shape (``msg_`` id, content blocks, ``message_start`` …
+- The Responses result - object or SSE event sequence - back to the Anthropic
+  Message shape (``msg_`` id, content blocks, ``message_start`` ...
   ``message_stop``).
 
 Deliberate Phase 1 behavior differences, documented in the README:
@@ -45,7 +45,6 @@ from .meter import BYTES_PER_TOKEN_ESTIMATE, record_usage_event
 from .opencode_session import opencode_session_headers
 from .protocol import (
     ANTHROPIC_THINKING_LEVELS,
-    DEFAULT_MODEL,
     _as_int,
     drop_dangling_function_calls,
     extract_reasoning_effort,
@@ -124,7 +123,7 @@ def count_messages_tokens(payload: Json) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Request translation: Anthropic Messages → Responses payload
+# Request translation: Anthropic Messages -> Responses payload
 # ---------------------------------------------------------------------------
 
 
@@ -350,7 +349,7 @@ def anthropic_to_responses_payload(payload: Json) -> tuple[Json, Json]:
             input_items.append({"role": "user", "content": parts})
 
     out: Json = {
-        "model": payload.get("model") or DEFAULT_MODEL,
+        "model": payload.get("model") or "",
         "input": input_items,
         "stream": payload.get("stream") is True,
     }
@@ -393,7 +392,7 @@ def anthropic_to_responses_payload(payload: Json) -> tuple[Json, Json]:
 
 
 # ---------------------------------------------------------------------------
-# Response translation: Responses object → Anthropic Message
+# Response translation: Responses object -> Anthropic Message
 # ---------------------------------------------------------------------------
 
 
@@ -497,7 +496,7 @@ def responses_to_anthropic_message(response: Json, model: str) -> Json:
 
 
 # ---------------------------------------------------------------------------
-# Stream translation: Responses SSE events → Anthropic Messages SSE
+# Stream translation: Responses SSE events -> Anthropic Messages SSE
 # ---------------------------------------------------------------------------
 
 
@@ -505,7 +504,7 @@ class ResponsesToAnthropicStream:
     """Consume Responses SSE event dicts; emit Anthropic Messages SSE frames.
 
     One instance per client stream. ``write`` is the caller's client-write
-    callable (``(bytes) -> bool``, False when the client is gone) — either the
+    callable (``(bytes) -> bool``, False when the client is gone) - either the
     stream engine's locked writer or a KeepaliveWriter. Frames carry both the
     ``event:`` line and the ``data:`` JSON, matching the wire format the real
     Anthropic API emits. ``consume`` returns False once the client write has
@@ -521,7 +520,7 @@ class ResponsesToAnthropicStream:
         self._finished = False
         self._errored = False
         self._next_index = 0
-        # item id → open content-block index (insertion order = block order)
+        # item id -> open content-block index (insertion order = block order)
         self._open: dict[str, int] = {}
         self._tool_args_streamed: set[str] = set()
         self._saw_tool_use = False
@@ -600,7 +599,7 @@ class ResponsesToAnthropicStream:
         if key not in self._open:
             # A text delta for a block whose added was never seen (verbatim
             # upstream quirk): open a text block lazily rather than dropping
-            # the text. Other delta types are dropped instead — a thinking or
+            # the text. Other delta types are dropped instead - a thinking or
             # input_json delta inside a text block would corrupt the block
             # type the client is accumulating.
             if not key or delta.get("type") != "text_delta":
@@ -736,8 +735,8 @@ class ResponsesToAnthropicStream:
 class AnthropicStreamEngine(_ZenStreamEngine):
     """_ZenStreamEngine whose client stream speaks Anthropic Messages SSE.
 
-    Everything upstream of send_event — connect retries, per-family chunk
-    parsing, accumulation, the empty-completion retry, metering — is inherited
+    Everything upstream of send_event - connect retries, per-family chunk
+    parsing, accumulation, the empty-completion retry, metering - is inherited
     unchanged; only the client-facing events are translated. The base
     finalize() writes an OpenAI-style ``data: [DONE]`` sentinel that has no
     meaning in the Anthropic stream, so _write drops exactly that frame.
@@ -788,7 +787,13 @@ def handle_anthropic_messages_request(
     so Claude Code can drive every Go model.
     """
     started = time.time()
-    model = payload.get("model") or DEFAULT_MODEL
+    model = payload.get("model")
+    if not isinstance(model, str) or not model:
+        raise ProxyError(
+            HTTPStatus.BAD_REQUEST,
+            "model must be a non-empty string",
+            error_type="invalid_request_error",
+        )
     bare_id, family = go_request_identity(model)
     if family == ANTHROPIC_MESSAGES:
         handle_go_messages_request(handler, payload, config, request_id)

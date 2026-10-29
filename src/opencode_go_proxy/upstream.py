@@ -1,32 +1,18 @@
-"""One upstream chat-completions client with one retry policy.
+"""Shared retry policy and error normalization for upstream calls.
 
-Every non-streaming upstream call goes through :func:`call_upstream_chat`:
-JSON request, bounded retries on transient failures (429 / 5xx / network /
-timeout, excluding terminal account quota failures), and a consistent mapping
-of upstream failures to :class:`ProxyError`.
+One retry policy (bounded backoff on 429 / 5xx / network / timeout, excluding
+terminal account quota failures) and one normalization of the Go quota
+envelope, used by every per-family call path in zen_upstream and go_upstream.
 """
 
 from __future__ import annotations
 
-import http.client
 import json
 import os
 import time
-import urllib.error
-import urllib.request
-from http import HTTPStatus
 from typing import Any
 
-from .config import ProxyConfig
-from .errors import ProxyError
-from .opencode_session import opencode_session_headers
 from .protocol import cache_stats_from_usage
-from .quota import record_quota_from_headers
-from .secrets import resolve_api_key
-from .trace import _mask_trace_body, trace
-from .upstream_headers import base_upstream_headers
-
-Json = dict[str, Any]
 
 # Upstream retry policy. Transient failures (429 / 5xx / network / timeout) are
 # retried a bounded number of times with a small exponential backoff before the
@@ -126,182 +112,3 @@ def record_cache(tracker: Any, model: str | None, usage: Any) -> None:
     if stats["ratio"] is None:
         return
     tracker.record(model or "unknown", stats["hit"], stats["miss"])
-
-
-def _chat_request(
-    url: str,
-    api_key: str,
-    raw_payload: bytes,
-    session_headers: dict[str, str] | None = None,
-) -> urllib.request.Request:
-    """Build the one upstream chat-completions request shape both clients share.
-
-    ``session_headers`` carries the stable ``x-opencode-session`` affinity id
-    the Go gateway expects; sub-calls without it (image captioning) are
-    rejected with ``MissingSessionID`` and burn their retry budget.
-    """
-    headers = base_upstream_headers()
-    headers["authorization"] = f"Bearer {api_key}"
-    if session_headers:
-        headers.update(session_headers)
-    return urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
-
-
-def call_upstream_chat(chat_payload: Json, config: ProxyConfig, request_id: str, *, timeout_sec: float | None = None, max_retries: int | None = None) -> tuple[Json, int]:
-    api_key = resolve_api_key(config, request_id)
-
-    url = f"{config.chat_base_url}/chat/completions"
-    raw_payload = json.dumps(chat_payload, separators=(",",":")).encode("utf-8")
-    max_retries = default_max_retries() if max_retries is None else max_retries
-    retries = 0
-    while True:
-        request = _chat_request(
-            url, api_key, raw_payload,
-            session_headers=opencode_session_headers(None, chat_payload),
-        )
-        trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
-        started = time.time()
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec) as response:
-                body = response.read()
-                record_quota_from_headers(getattr(response, "headers", None))
-                elapsed_ms = int((time.time() - started) * 1000)
-                trace("upstream.done", level="debug", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
-                try:
-                    value = json.loads(body)
-                except json.JSONDecodeError:
-                    raise ProxyError(HTTPStatus.BAD_GATEWAY, "upstream returned invalid JSON")
-                if not isinstance(value, dict):
-                    raise ProxyError(HTTPStatus.BAD_GATEWAY, "upstream returned non-object JSON")
-                return value, retries
-        except urllib.error.HTTPError as exc:
-            raw = exc.read()
-            body = raw.decode("utf-8", errors="replace")
-            trace(
-                "upstream.error", level="warn",
-                request_id=request_id,
-                status=exc.code,
-                body=_mask_trace_body(body),
-                body_len=len(raw),
-            )
-            if retriable_http_failure(exc.code, body) and retries < max_retries:
-                retries += 1
-                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
-                retry_sleep(retries)
-                continue
-            if exc.code == 429:
-                upstream_retry_after = (exc.headers or {}).get("retry-after")
-                retry_after = upstream_retry_after or "5"
-                normalized = normalize_usage_limit_error(body)
-                if normalized is not None:
-                    raise ProxyError(
-                        HTTPStatus.TOO_MANY_REQUESTS,
-                        json.loads(normalized)["error"]["message"],
-                        retries=retries,
-                        error_type="insufficient_quota",
-                        headers={"retry-after": upstream_retry_after} if upstream_retry_after else None,
-                    ) from exc
-                raise ProxyError(
-                    HTTPStatus.TOO_MANY_REQUESTS,
-                    f"rate limited (retry after {retry_after}s)",
-                    retries=retries,
-                    headers={"retry-after": upstream_retry_after} if upstream_retry_after else None,
-                ) from exc
-            if exc.code == 503:
-                raise ProxyError(HTTPStatus.SERVICE_UNAVAILABLE, "upstream unavailable", retries=retries) from exc
-            if exc.code == 504:
-                raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from exc
-            raise ProxyError(
-                HTTPStatus.BAD_GATEWAY,
-                f"upstream HTTP {exc.code}",
-                retries=retries,
-                upstream_status=exc.code,
-                body=body,
-            ) from exc
-        except TimeoutError:
-            trace("upstream.timeout", level="warn", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
-            if retries < max_retries:
-                retries += 1
-                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None
-
-        except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
-            # Transient connect-phase failures, incl. RemoteDisconnected (a
-            # ConnectionResetError/BadStatusLine hybrid, not a URLError).
-            trace("upstream.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
-            if retries < max_retries:
-                retries += 1
-                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.BAD_GATEWAY, f"upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc
-
-
-def call_upstream_chat_verbatim(
-    chat_payload: Json, config: ProxyConfig, request_id: str,
-    *, timeout_sec: float | None = None, max_retries: int | None = None,
-) -> tuple[int, bytes, int, str | None, str | None]:
-    """POST chat/completions and return ``(status, raw_body, retries, content_type, retry_after)``.
-
-    The /chat/completions passthrough relay: an upstream HTTP error is returned
-    with the upstream's own status and body so the proxy relays it verbatim
-    instead of substituting a ``proxy_error`` envelope. Transient failures
-    (429 / 5xx) retry under the same policy as :func:`call_upstream_chat`;
-    network and timeout failures have no upstream body to relay, so they still
-    raise :class:`ProxyError` like the JSON-mapping variant. ``retry_after``
-    is the upstream's retry-after header value (lowercased lookup, None when
-    absent) so the relay can forward it on rate-limit responses.
-    """
-    api_key = resolve_api_key(config, request_id)
-
-    url = f"{config.chat_base_url}/chat/completions"
-    raw_payload = json.dumps(chat_payload, separators=(",",":")).encode("utf-8")
-    max_retries = default_max_retries() if max_retries is None else max_retries
-    retries = 0
-    while True:
-        request = _chat_request(
-            url, api_key, raw_payload,
-            session_headers=opencode_session_headers(None, chat_payload),
-        )
-        trace("upstream.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
-        started = time.time()
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec) as response:
-                body = response.read()
-                record_quota_from_headers(getattr(response, "headers", None))
-                elapsed_ms = int((time.time() - started) * 1000)
-                trace("upstream.done", level="debug", request_id=request_id, status=response.status, bytes=len(body), elapsed_ms=elapsed_ms)
-                return response.status, body, retries, response.headers.get("content-type"), (response.headers or {}).get("retry-after")
-        except urllib.error.HTTPError as exc:
-            body = exc.read()
-            trace("upstream.error", level="warn", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
-            if retriable_http_failure(exc.code, body) and retries < max_retries:
-                retries += 1
-                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
-                retry_sleep(retries)
-                continue
-            normalized = normalize_usage_limit_error(body)
-            if normalized is not None:
-                body = normalized
-            return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), (exc.headers or {}).get("retry-after")
-        except TimeoutError:
-            trace("upstream.timeout", level="warn", request_id=request_id, timeout=timeout_sec if timeout_sec is not None else config.timeout_sec)
-            if retries < max_retries:
-                retries += 1
-                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.GATEWAY_TIMEOUT, "upstream timeout", retries=retries) from None
-
-        except (urllib.error.URLError, ConnectionError, http.client.HTTPException, OSError) as exc:
-            # Transient connect-phase failures, incl. RemoteDisconnected (a
-            # ConnectionResetError/BadStatusLine hybrid, not a URLError).
-            trace("upstream.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
-            if retries < max_retries:
-                retries += 1
-                trace("upstream.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
-                retry_sleep(retries)
-                continue
-            raise ProxyError(HTTPStatus.BAD_GATEWAY, f"upstream network error: {getattr(exc, 'reason', exc)}", retries=retries) from exc

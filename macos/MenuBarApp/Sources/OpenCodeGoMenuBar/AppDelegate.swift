@@ -285,13 +285,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             todayLabel.title = Self.todayText(serverState?.usage)
         }
         if let modelLabel {
-            modelLabel.title = "Model \(serverState?.model ?? "—")"
+            modelLabel.title = "Model \(serverState?.model ?? "-")"
         }
         if let catalogLabel {
             if let count = proxy.catalogCount {
                 catalogLabel.title = count == 1 ? "1 model" : "\(count) models"
             } else {
-                catalogLabel.title = "—"
+                catalogLabel.title = "-"
             }
         }
         if let refreshCatalogItem {
@@ -304,7 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .some(false):
                 configLabel.title = "Config disabled"
             case .none:
-                configLabel.title = "Config —"
+                configLabel.title = "Config -"
             }
         }
         if let configToggleItem {
@@ -321,7 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateUsageBars(_ usage: UsageSummary?) {
         guard let usage else {
             for item in usageBarItems {
-                item.title = "—"
+                item.title = "-"
             }
             return
         }
@@ -331,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var bar = ""
             if day.tokens > 0 {
                 let count = max(1, Int(ceil(Double(day.tokens) / Double(max(1, maxTokens)) * 8)))
-                bar = String(repeating: "█", count: count)
+                bar = String(repeating: "#", count: count)
             }
             item.title = "\(weekday) \(bar) \(Self.formatTokens(day.tokens))"
         }
@@ -342,7 +342,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateZenBars(_ zen: ZenUsage?) {
         guard let zen else {
             for item in zenBarItems {
-                item.title = "—"
+                item.title = "-"
             }
             return
         }
@@ -351,7 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for (index, item) in zenBarItems.enumerated() {
             let offset = days.count - 1 - index
             guard offset >= 0, offset < days.count else {
-                item.title = "—"
+                item.title = "-"
                 continue
             }
             let tokens = days[offset]
@@ -360,14 +360,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var bar = ""
             if tokens > 0 {
                 let count = max(1, Int(ceil(Double(tokens) / Double(max(1, maxTokens)) * 8)))
-                bar = String(repeating: "█", count: count)
+                bar = String(repeating: "#", count: count)
             }
             item.title = "\(weekday) \(bar) \(Self.formatTokens(tokens))"
         }
     }
 
     private static func displayUpstream(_ raw: String?) -> String {
-        guard let raw, !raw.isEmpty else { return "—" }
+        guard let raw, !raw.isEmpty else { return "-" }
         var value = raw
         for prefix in ["https://", "http://"] where value.hasPrefix(prefix) {
             value.removeFirst(prefix.count)
@@ -375,15 +375,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return value
     }
 
-    /// "0.4.8" → "v0.4.8"; keeps an already-prefixed version as-is.
+    /// "0.4.8" -> "v0.4.8"; keeps an already-prefixed version as-is.
     private static func versionText(_ version: String) -> String {
         version.hasPrefix("v") ? version : "v" + version
     }
 
-    /// "proxy v0.4.8 (pin v0.4.8)" — the child's running version plus the
+    /// "proxy v0.4.8 (pin v0.4.8)" - the child's running version plus the
     /// tag this app launches it with.
     private static func versionRowTitle(runningVersion: String?, pin: String?) -> String {
-        guard let runningVersion else { return "proxy —" }
+        guard let runningVersion else { return "proxy -" }
         let pinText = pin.map { "pin \($0)" } ?? "unpinned"
         return "proxy \(versionText(runningVersion)) (\(pinText))"
     }
@@ -391,19 +391,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static func quotaText(_ quota: QuotaSnapshot?) -> String {
         guard let quota else { return "Quota n/a" }
         if let limit = quota.limit {
-            return "Quota \(quota.remaining) / \(limit) · \(quota.provider)"
+            return "Quota \(quota.remaining) / \(limit) | \(quota.provider)"
         }
-        return "Quota \(quota.remaining) · \(quota.provider)"
+        return "Quota \(quota.remaining) | \(quota.provider)"
     }
 
     private static func todayText(_ usage: UsageSummary?) -> String {
-        guard let usage else { return "Today —" }
-        return "Today \(usage.todayTurns) turns · \(formatTokens(usage.todayTokens)) tok"
+        guard let usage else { return "Today -" }
+        return "Today \(usage.todayTurns) turns | \(formatTokens(usage.todayTokens)) tok"
     }
 
     private static func goLimitsText(_ limits: GoLimits?) -> String? {
         guard let limits else { return nil }
-        return "Go limits: $\(limits.monthlyDollars)/mo · $\(limits.weeklyDollars)/wk · $\(limits.rolling5hDollars)/5h"
+        return "Go limits: $\(limits.monthlyDollars)/mo | $\(limits.weeklyDollars)/wk | $\(limits.rolling5hDollars)/5h"
     }
 
     private static func goUsageText(_ go: GoUsage?) -> String? {
@@ -421,11 +421,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let monthly = go.monthly {
             parts.append(Self.windowText(monthly, label: "mo"))
         }
-        return "Go usage: " + parts.joined(separator: " · ")
+        return "Go usage: " + parts.joined(separator: " | ")
     }
 
     private static func windowText(_ window: GoWindow, label: String) -> String {
-        var text = window.percent.map { "\($0)% \(label)" } ?? "\(label) —"
+        var text = window.percent.map { "\($0)% \(label)" } ?? "\(label) -"
         if !window.status.isEmpty && window.status != "ok" {
             text += " (\(window.status))"
         }
@@ -434,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private static func zenTodayText(_ zen: ZenUsage?) -> String? {
         guard let zen else { return nil }
-        return "Zen today: \(zen.todayTurns) turns · \(formatTokens(zen.todayTokens)) tok"
+        return "Zen today: \(zen.todayTurns) turns | \(formatTokens(zen.todayTokens)) tok"
     }
 
     private static func lowercasedFirst(_ text: String) -> String {
@@ -487,7 +487,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let latest = update?.latest, update?.available == true else { return }
         let alert = NSAlert()
         alert.messageText = "Update proxy to \(Self.versionText(latest))?"
-        alert.informativeText = "The proxy restarts."
+        alert.informativeText = """
+            The proxy restarts.
+            Source: \(proxy.resolvedSourceForDisplay)
+            """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Cancel")

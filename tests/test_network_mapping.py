@@ -15,7 +15,6 @@ from http import HTTPStatus
 from types import SimpleNamespace
 from unittest import mock
 
-from opencode_go_proxy import upstream as up
 from opencode_go_proxy import zen_upstream as zu
 from opencode_go_proxy.errors import ProxyError
 from opencode_go_proxy.streaming import _ConnectFailed, _open_upstream_stream
@@ -62,30 +61,6 @@ class TestOpenStreamMapping:
                 _open_upstream_stream(_req(), _config(), "r", 0)
             except _ConnectFailed as fail:
                 assert isinstance(fail.exc, TimeoutError)
-            else:  # pragma: no cover
-                raise AssertionError("TimeoutError leaked raw")
-
-
-class TestChatMapping:
-    def test_ssl_error_becomes_502(self) -> None:
-        with mock.patch.dict("os.environ", {"OPENCODE_GO_API_KEY": "test"}), \
-             _raise(ssl.SSLError("SSLV3_ALERT_BAD_RECORD_MAC")):
-            try:
-                up.call_upstream_chat({"model": "m", "messages": []},
-                                      _config(), "r", max_retries=0)
-            except ProxyError as exc:
-                assert int(exc.status) == int(HTTPStatus.BAD_GATEWAY)
-            else:  # pragma: no cover
-                raise AssertionError("SSLError leaked raw")
-
-    def test_timeout_stays_504(self) -> None:
-        with mock.patch.dict("os.environ", {"OPENCODE_GO_API_KEY": "test"}), \
-             _raise(TimeoutError("timed out")):
-            try:
-                up.call_upstream_chat({"model": "m", "messages": []},
-                                      _config(), "r", max_retries=0)
-            except ProxyError as exc:
-                assert int(exc.status) == int(HTTPStatus.GATEWAY_TIMEOUT)
             else:  # pragma: no cover
                 raise AssertionError("TimeoutError leaked raw")
 
