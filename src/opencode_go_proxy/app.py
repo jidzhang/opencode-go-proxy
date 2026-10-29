@@ -417,7 +417,11 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
             self._send_proxy_error(
                 exc, payload=anthropic_error_payload(exc) if anthropic_surface else None
             )
-        except BrokenPipeError:
+        except ConnectionError:
+            # The client went away mid-response (including while an error
+            # envelope was being written after a slow upstream turn). That is a
+            # disconnect, not a proxy crash: WinError 10053 arrives as
+            # ConnectionAbortedError, which BrokenPipeError alone missed.
             trace("client.disconnected", level="info", request_id=request_id, message="client closed connection during stream")
         except Exception as exc:  # pragma: no cover - defensive crash trace  # noqa: BLE001
             trace("request.crashed", level="error", request_id=request_id, message=str(exc), traceback=traceback.format_exc())
@@ -430,7 +434,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
                 self._send_proxy_error(
                     crash, payload=anthropic_error_payload(crash) if anthropic_surface else None
                 )
-            except BrokenPipeError:
+            except ConnectionError:
                 pass
 
     def _config(self) -> ProxyConfig:
