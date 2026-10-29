@@ -25,6 +25,11 @@ echo   restart %SVC% via NSSM
 echo ============================================
 echo.
 
+echo [0/3] Pruning old rotated logs (keep newest 5 generations) ...
+powershell -NoProfile -Command "Get-ChildItem '%~dp0logs\service.err-*.log','%~dp0logs\service.out-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -ErrorAction SilentlyContinue"
+echo       done.
+echo.
+
 echo [1/3] Current service info ---
 echo       status:
 "%NSSM%" status %SVC% 2>nul
