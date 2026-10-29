@@ -85,7 +85,7 @@ def _canonical_model_defaults() -> dict[str, Any]:
         "availability_nux": None,
         "base_instructions": "",  # computed from shared_instructions at render
         "comp_hash": "",
-        "context_window": 1000000,
+        "context_window": None,
         "default_reasoning_level": "medium",
         "default_reasoning_summary": "none",
         "default_service_tier": None,
@@ -97,7 +97,7 @@ def _canonical_model_defaults() -> dict[str, Any]:
         "include_plugin_usage_instructions": True,
         "include_skills_usage_instructions": True,
         "input_modalities": ["text"],
-        "max_context_window": 1000000,
+        "max_context_window": None,
         "model_messages": {},  # computed at render
         "multi_agent_version": "v2",
         "priority": 50,
@@ -304,7 +304,7 @@ IDENTITY_LINE = (
 def model_messages(
     shared_instructions: str,
     display_name: str,
-    context_window: int,
+    context_window: int | None,
     record: dict | None = None,
 ) -> dict[str, Any]:
     """Build the model_messages dict Codex requires for a rendered model.
@@ -361,10 +361,14 @@ def render_full_catalog(compact: dict) -> dict:
         full["base_instructions"] = shared_instructions
         context = full.get("context_window")
         if not isinstance(context, int) or context <= 0:
-            context = 1000000
+            # Unknown window stays unknown: the proxy has no data to assert one.
+            context = None
+            full["context_window"] = None
+            full["max_context_window"] = None
         limit = full.get("auto_compact_token_limit")
         full["auto_compact_token_limit"] = (
-            limit if isinstance(limit, int) and limit > 0 else round(context * 0.9)
+            limit if isinstance(limit, int) and limit > 0
+            else (round(context * 0.9) if context else None)
         )
         if not full.get("comp_hash"):
             full["comp_hash"] = _comp_hash_for(slug)
@@ -566,50 +570,6 @@ def apply_hidden_models(models: list[dict], hidden: set[str]) -> list[dict]:
         {**entry, "visibility": "hide"} if str(entry.get("slug", "")) in hidden else entry
         for entry in models
     ]
-
-
-def write_hidden_models(hidden: set[str], path: str | None = None) -> None:
-    """Persist hidden-model slugs in the codex-router model-picker.json shape.
-
-    The shape read_hidden_models() reads: {"version": 1, "hidden": [...]}.
-    Idempotent: writing an already-persisted set rewrites an identical file.
-    """
-    if path is None:
-        path = model_picker_path()
-    _write_json(path, {"version": 1, "hidden": sorted({str(slug) for slug in hidden})})
-
-
-def hide_model_from_picker(slug: str) -> bool:
-    """Hide one slug in the picker: persist model-picker.json and re-render.
-
-    Hidden models are filtered at render time (apply_hidden_models) and the
-    picker reads merged-models.json, so the merged catalog is re-rendered once
-    to make the hide reach the picker immediately. Returns True when the slug
-    was newly hidden; False when it was already hidden (idempotent no-op).
-    """
-    hidden = read_hidden_models()
-    if slug in hidden:
-        return False
-    hidden.add(slug)
-    write_hidden_models(hidden)
-    render_merged_catalog()
-    return True
-
-
-def unhide_model_from_picker(slug: str) -> bool:
-    """Restore one slug in the picker: drop it from model-picker.json and re-render.
-
-    Returns True when the slug was hidden and is now shown; False when it was
-    not hidden (no-op). The merged catalog is re-rendered once so the picker
-    sees the restored model immediately.
-    """
-    hidden = read_hidden_models()
-    if slug not in hidden:
-        return False
-    hidden.discard(slug)
-    write_hidden_models(hidden)
-    render_merged_catalog()
-    return True
 
 
 def _format_token_count(tokens: int) -> str:
@@ -913,8 +873,10 @@ def _full_native_record(entry: Json) -> Json:
         full["comp_hash"] = f"codex-{slug.replace('/', '-')}-v1"
     context = full.get("context_window")
     if not isinstance(context, int) or context <= 0:
-        context = 1000000
-    full["auto_compact_token_limit"] = round(context * 0.9)
+        context = None
+        full["context_window"] = None
+        full["max_context_window"] = None
+    full["auto_compact_token_limit"] = round(context * 0.9) if context else None
     full["base_instructions"] = ""
     full["model_messages"] = model_messages("", full["display_name"], context, full)
     return full
@@ -933,7 +895,7 @@ def _zen_merged_records(go_records: list[Json] | None = None) -> list[Json]:
     catalog: when a go record carries the same display name or the same bare
     id, the zen record's display name gets a " (Zen)" suffix so the two
     picker entries read differently. Zen-only models keep the plain id as
-    their name — no go entry exists to collide with.
+    their name - no go entry exists to collide with.
     """
     from .zen_catalog import zen_families, zen_model_ids
 
@@ -956,38 +918,17 @@ def _zen_merged_records(go_records: list[Json] | None = None) -> list[Json]:
         if display_name in go_display_names or model_id in go_slugs:
             display_name = f"{display_name} (Zen)"
         full["display_name"] = display_name
-        full["description"] = f"Zen model {model_id} served through opencode.ai/zen."
+        # The zen capture carries ids and wire families only, so every
+        # capability field stays at its canonical "unknown" value instead of a
+        # synthesized description or a 1M window nobody measured.
         full["comp_hash"] = _comp_hash_for(slug)
         full["family"] = families.get(model_id)
         context = full["context_window"]
-        full["auto_compact_token_limit"] = round(context * 0.9)
+        full["auto_compact_token_limit"] = round(context * 0.9) if context else None
         full["base_instructions"] = ""
         full["model_messages"] = model_messages("", display_name, context, full)
         records.append(full)
     return records
-
-
-def _clamp_efforts(models: list[Json], native_efforts: set[str]) -> list[Json]:
-    """Drop opencode-go reasoning levels whose effort the native capture lacks.
-
-    With no native capture there is no vocabulary to clamp against, so the
-    entries are left untouched.
-    """
-    if not native_efforts:
-        return models
-    clamped = []
-    for entry in models:
-        levels = entry.get("supported_reasoning_levels")
-        if not isinstance(levels, list):
-            clamped.append(entry)
-            continue
-        kept = [
-            level
-            for level in levels
-            if isinstance(level, dict) and level.get("effort") in native_efforts
-        ]
-        clamped.append({**entry, "supported_reasoning_levels": kept})
-    return clamped
 
 
 def _go_merged_records(models: list[Json]) -> list[Json]:
@@ -1020,7 +961,7 @@ def render_merged_catalog() -> dict:
     the zen cache files, so this function stays network-free. Written under
     the state dir.
     """
-    from .native_models import load_native_capture, native_effort_vocabulary
+    from .native_models import load_native_capture
 
     compact = load_runtime_compact()
     if compact is None:
@@ -1035,9 +976,11 @@ def render_merged_catalog() -> dict:
         }
     rendered = render_runtime_catalog(compact)
     native = load_native_capture()
-    go_models = _go_merged_records(
-        _clamp_efforts(rendered.get("models", []), native_effort_vocabulary(native))
-    )
+    # Each vendor's declared reasoning levels are forwarded as-is: clamping a
+    # Go model's levels against the native Codex vocabulary rewrote one
+    # provider's capabilities using another provider's data and silently
+    # removed user-selectable levels.
+    go_models = _go_merged_records(rendered.get("models", []))
     models = [_full_native_record(entry) for entry in native.get("models", [])]
     models.extend(go_models)
     models.extend(_zen_merged_records(go_models))
@@ -1133,7 +1076,6 @@ __all__ = [
     "auto_announcement_copy",
     "default_catalog_path",
     "discover_models",
-    "hide_model_from_picker",
     "load_compact",
     "load_known_slugs",
     "load_runtime_compact",
@@ -1155,8 +1097,6 @@ __all__ = [
     "seed_compact_path",
     "state_catalog_path",
     "state_compact_path",
-    "unhide_model_from_picker",
     "write_announced_at",
     "write_catalog",
-    "write_hidden_models",
 ]

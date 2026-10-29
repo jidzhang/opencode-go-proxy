@@ -542,22 +542,23 @@ def test_scenario_02_429_retries_then_surfaces_retry_after(
     check.finish()
 
 
-def test_scenario_03_500_retried_then_surfaces_502(
+def test_scenario_03_500_retried_then_forwarded(
     proxy: _ScratchProxyServer, mock_upstream: _MockServer, scratch_port: int
 ) -> None:
     mock_upstream.behavior.mode = MODE_500
     check = ExpectationCheck("scenario 03: 500 retry")
     status, _headers, raw = post_json(scratch_port, "/v1/responses", responses_payload())
     body = json.loads(raw)
-    check.expect_equal("client status", status, 502)
+    # The upstream status is forwarded verbatim, not relabelled 502.
+    check.expect_equal("client status", status, 500)
     check.check(
-        "proxy envelope names the upstream 500",
-        "upstream HTTP 500" in body.get("error", {}).get("message", ""),
+        "proxy envelope carries the upstream's own error message",
+        "boom" in body.get("error", {}).get("message", ""),
         body.get("error", {}).get("message", ""),
     )
     check.expect_equal("upstream saw initial + 2 retries", mock_upstream.behavior.count, 3)
     event = meter_events()[-1]
-    check.expect_equal("meter status reflects the final 502", event.get("status"), 502)
+    check.expect_equal("meter status reflects the forwarded 500", event.get("status"), 500)
     check.expect_equal("meter counts the 2 retries", event.get("retries"), 2)
     check.finish()
 

@@ -10,6 +10,8 @@ Usage:
 Sends the sanitized input (orphans dropped, like the proxy does) as a bare
 Responses body to https://opencode.ai/zen/go/v1/responses.
 """
+
+# ruff: noqa: E402 - path setup precedes the sibling import
 from __future__ import annotations
 
 import argparse
@@ -24,7 +26,7 @@ sys.path.insert(0, SCRIPT_DIR)
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
-from replay_turn import load_items  # noqa: E402
+from replay_turn import load_items
 
 
 def main(argv: list) -> int:
@@ -40,8 +42,8 @@ def main(argv: list) -> int:
     if not key:
         print("need $OPENCODE_GO_API_KEY in env", file=sys.stderr)
         return 2
-    from opencode_go_proxy.protocol import drop_dangling_function_calls
     from opencode_go_proxy.opencode_session import opencode_session_headers
+    from opencode_go_proxy.protocol import drop_dangling_function_calls
 
     items = load_items(args.rollout, args.ord_cap)
     items, _ = drop_dangling_function_calls(items)
@@ -54,7 +56,7 @@ def main(argv: list) -> int:
         req = urllib.request.Request("https://opencode.ai/zen/go/v1/responses",
                                      data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=args.timeout):
                 print(f"try{n}: 200", flush=True)
         except urllib.error.HTTPError as exc:
             print(f"try{n}: {exc.code} {exc.read()[:150]}", flush=True)

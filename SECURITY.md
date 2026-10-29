@@ -15,11 +15,16 @@ The proxy never needs credentials committed to the repository. It resolves the
 upstream API key in this order:
 
 1. The configured environment variable, defaulting to `OPENCODE_GO_API_KEY`.
-2. The macOS keychain entry `opencode-go-api-key` (override with `CODEX_KEYCHAIN_SERVICE`).
+2. `OPENCODE_API_KEY` (the generic OpenCode name).
+3. The macOS keychain, trying `CODEX_KEYCHAIN_SERVICE` when set, then
+   `opencode-go-api-key`, then `codex-router-opencode-go`.
 
 Only credential-source metadata is traced. Credential values are retained only
 in process memory and are not written to the proxy's meter, trace, catalog, or
-support bundle.
+support bundle. One caveat sits outside the proxy process: installing the
+Windows service with `install-service.bat` stores the key and the caller token
+in the NSSM service configuration (`AppEnvironmentExtra`), which lives in the
+Windows registry and is readable by administrators.
 
 Native OpenAI requests are a separate path. If a requested model is in the
 captured native Codex catalog, the proxy relays the client's existing
@@ -38,8 +43,12 @@ A non-loopback bind fails closed unless:
 
 1. `OPENCODE_GO_PROXY_ALLOW_REMOTE=1` is set.
 2. `OPENCODE_GO_PROXY_CALLER_TOKEN` contains at least 32 characters.
-3. Every non-loopback client sends that value in
-   `X-OpenCode-Go-Proxy-Token`.
+3. Every non-loopback client presents that value in one of three transports:
+   the `X-OpenCode-Go-Proxy-Token` header, `Authorization: Bearer <token>`,
+   or `x-api-key: <token>`. The Bearer and `x-api-key` forms exist for
+   clients that cannot send custom headers; whichever transport arrives, the
+   value is a proxy capability only and is stripped before anything is
+   forwarded upstream.
 
 The caller token protects access to the proxy; it is not an upstream provider
 credential. The proxy does not forward `X-OpenCode-Go-Proxy-Token` to native or
@@ -54,11 +63,11 @@ excludes hop-by-hop and proxy-control headers.
 
 ## SSRF protection
 
-Image URLs in conversation content are validated — only `data:image/` and
+Image URLs in conversation content are validated - only `data:image/` and
 `https://` schemes are allowed. `file://`, `http://`, `ftp://`, and other
 schemes are rejected to prevent server-side request forgery.
 
-The proxy does not fetch image URLs itself — it forwards them to the upstream
+The proxy does not fetch image URLs itself - it forwards them to the upstream
 Chat Completions API, which is responsible for fetching and processing them.
 The scheme check prevents the proxy from passing `file://` or `http://` URLs
 that could be used to probe internal services via the upstream.

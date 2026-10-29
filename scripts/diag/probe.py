@@ -11,6 +11,8 @@ SPEC is comma-separated unit ranges, e.g. "354-531,620-709" (unit indices
 into the sanitized unit list; use --list-units to inspect).
 --repeat N sends the same probe N times (flake detection).
 """
+
+# ruff: noqa: E402 - path setup precedes the sibling import
 from __future__ import annotations
 
 import argparse
@@ -25,7 +27,7 @@ sys.path.insert(0, SCRIPT_DIR)
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
 
-from replay_turn import load_items  # noqa: E402
+from replay_turn import load_items
 
 
 def load_units(rollout: str, cap: int) -> list:

@@ -137,7 +137,7 @@
     {
       "slug": "deepseek-v4-flash",
       "display_name": "DeepSeek V4 Flash",
-      "description": "Fast, cheap. Best default for everyday coding.",
+      "description": "DeepSeek V4 Flash via the OpenCode Go API.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -245,7 +245,7 @@
     {
       "slug": "mimo-v2.5",
       "display_name": "MiMo V2.5",
-      "description": "Cheapest model on Go. Used for vision/image captioning.",
+      "description": "MiMo V2.5 via the OpenCode Go API.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {

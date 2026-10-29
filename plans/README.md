@@ -12,10 +12,10 @@ steps; cleanup-progress.md tracks the review-driven fix batches.
 
 | # | Plan | Status |
 |---|------|--------|
-| 001 | vision-caption-latency | IMPLEMENTED (5d762cc) |
+| 001 | vision-caption-latency | SUPERSEDED: caption auto-pick removed; see plans/2026-10-29-proxy-scope-audit.md |
 | 002 | split-app-py | IMPLEMENTED (f175f64) |
 | 003 | catalog-contract | IMPLEMENTED (b4ad017) |
-| 004 | vision-bridge | IMPLEMENTED (61ee34a) |
+| 004 | vision-bridge | SUPERSEDED: vision module deleted; see plans/2026-10-29-proxy-scope-audit.md |
 | 005 | protocol-surface | IMPLEMENTED (f71435d) |
 | 006 | auth-guard | IMPLEMENTED (de6c30c) |
 | 007 | correctness-contract | IMPLEMENTED (1885f67) |

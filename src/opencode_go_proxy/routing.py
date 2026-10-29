@@ -6,7 +6,7 @@ translation path. An explicit ``opencode-go/<slug>`` or ``zen/<slug>`` prefix
 always wins over native membership: the user chose the routed provider, and
 that request must never reach the native backend. A bare slug that names a
 zen-only model (present in the zen capture, absent from the opencode-go
-compact catalog) routes to zen — the picker hands those ids over bare, and
+compact catalog) routes to zen - the picker hands those ids over bare, and
 sending them to the opencode-go provider 401s. A bare slug the opencode-go
 catalog also owns stays on the opencode-go path (go wins for bare
 collisions); the ``zen/`` prefix opts a collision into zen.

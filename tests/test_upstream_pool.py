@@ -74,7 +74,7 @@ class FakeResp:
 
 
 class FakeConn:
-    instances: list["FakeConn"] = []
+    instances: list[FakeConn] = []
     next_failures: list[BaseException] = []
     resp_kwargs: dict = {}
 
@@ -245,8 +245,8 @@ class TestKeepAliveReuse:
             # Simulate http.client's silent detach on truncated readline EOF:
             # file gone, but 5 bytes still outstanding (read() would have
             # raised IncompleteRead; readline just detaches).
-            resp._resp.fp = None  # noqa: SLF001 - white-box pool contract
-            resp._resp.length = 5  # noqa: SLF001 - white-box pool contract
+            resp._resp.fp = None
+            resp._resp.length = 5
             resp.close()
             assert FakeConn.instances[0].closed is True
             assert pool.pool_stats()["idle"] == {}

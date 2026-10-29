@@ -12,7 +12,6 @@ import pytest
 
 from opencode_go_proxy.app import ProxyConfig, ResponsesProxyHandler
 from opencode_go_proxy.meter import record_usage_event
-from opencode_go_proxy.protocol import DEFAULT_MODEL
 from opencode_go_proxy.quota import quota_state_path, record_quota_from_headers
 from opencode_go_proxy.state import build_state, usage_summary
 
@@ -122,7 +121,8 @@ class TestBuildState:
         assert state["port"] == 8787
         assert state["upstream"] == "https://up.test/v1"
         assert state["quota"] is None
-        assert state["model"] == DEFAULT_MODEL
+        # No meter event yet: /state reports null instead of a baked-in model.
+        assert state["model"] is None
         assert state["usage"]["todayTurns"] == 0
         assert state["usage"]["todayTokens"] == 0
         assert len(state["usage"]["last7d"]) == 7
@@ -293,7 +293,8 @@ class TestStateEndpoint:
         assert state["port"] == server
         assert state["upstream"] == "https://up.test/v1"
         assert state["quota"] is None
-        assert state["model"] == DEFAULT_MODEL
+        # No meter event yet: /state reports null instead of a baked-in model.
+        assert state["model"] is None
         assert set(state["usage"]) == {"todayTurns", "todayTokens", "last7d", "go", "goLimits", "zen"}
         assert state["usage"]["go"] is None
         assert state["usage"]["zen"]["last7d"] == [0, 0, 0, 0, 0, 0, 0]

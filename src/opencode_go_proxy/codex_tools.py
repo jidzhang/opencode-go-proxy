@@ -25,6 +25,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+from .errors import env_flag
 from .meter import state_dir
 
 Json = dict[str, Any]
@@ -237,7 +238,7 @@ def load_snapshot_tools() -> list[Json]:
     Revalidation keeps the snapshot honest as the app updates: both a cache
     hit and a file re-read compare the binary's probed version (cached
     briefly, so hot paths spawn no subprocess) against ``captured_with`` and
-    re-capture on mismatch. Recapture is best-effort — a failure keeps the
+    re-capture on mismatch. Recapture is best-effort - a failure keeps the
     last known-good snapshot.
     """
     global _snapshot_cache
@@ -319,14 +320,31 @@ def _existing_flat_names(tools: list[Json]) -> set[str]:
     return names
 
 
-def merge_codex_app_tools(tools: list[Json]) -> list[Json]:
-    """Append snapshot codex_app tools missing from a request tool list.
+MERGE_TOOLS_ENV = "OPENCODE_GO_PROXY_MERGE_CODEX_APP_TOOLS"
 
-    Tools already present under their flattened name (either as a plain
-    ``codex_app__<name>`` function or inside a namespace group) are never
-    duplicated, and non-codex_app entries are left untouched. A request that
-    carries no codex_app tools at all gets the full snapshot appended.
+
+def merge_tools_enabled() -> bool:
+    """Whether the codex_app snapshot may be merged into caller tool lists.
+
+    Off by default: the tools a request exposes belong to the caller, and
+    appending definitions the caller never sent changes what the model can
+    invoke. Operators who rely on thread spawning through the proxy opt in
+    explicitly.
     """
+    return env_flag(MERGE_TOOLS_ENV, default_on=False)
+
+
+def merge_codex_app_tools(tools: list[Json]) -> list[Json]:
+    """Append snapshot codex_app tools when opted in; otherwise passthrough.
+
+    With ``OPENCODE_GO_PROXY_MERGE_CODEX_APP_TOOLS`` set, tools already present
+    under their flattened name (either as a plain ``codex_app__<name>`` function
+    or inside a namespace group) are never duplicated, non-codex_app entries
+    are left untouched, and a request that carries no codex_app tools at all
+    gets the full snapshot appended.
+    """
+    if not merge_tools_enabled():
+        return tools
     if not isinstance(tools, list):
         return tools
     existing = _existing_flat_names(tools)

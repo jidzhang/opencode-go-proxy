@@ -178,9 +178,19 @@ def test_merged_catalog_without_capture_is_opencode_go_only() -> None:
     assert "opencode-go/deepseek-v4-flash" in slugs
 
 
-def test_effort_clamp_drops_unknown_efforts() -> None:
+def test_go_reasoning_levels_are_forwarded_verbatim() -> None:
+    """A Go model's declared levels must survive the merge untouched.
+
+    The merge used to intersect them with the native Codex effort vocabulary,
+    which deleted levels one provider declared because a different provider
+    did not use those names.
+    """
     state = state_dir()
     os.makedirs(state, exist_ok=True)
+    levels = [
+        {"effort": "low", "description": "ok"},
+        {"effort": "ultra-super", "description": "only this vendor uses it"},
+    ]
     compact = {
         "fetched_at": "2026-08-13T00:00:00Z",
         "etag": "test",
@@ -191,45 +201,15 @@ def test_effort_clamp_drops_unknown_efforts() -> None:
                 "slug": "deepseek-v4-flash",
                 "display_name": "DeepSeek V4 Flash",
                 "context_window": 100000,
-                "supported_reasoning_levels": [
-                    {"effort": "low", "description": "ok"},
-                    {"effort": "medium", "description": "ok"},
-                    {"effort": "ultra-super", "description": "not native"},
-                ],
+                "supported_reasoning_levels": levels,
             }
         ],
     }
     with open(os.path.join(state, catalog.STATE_COMPACT_NAME), "w") as handle:
         json.dump(compact, handle)
-    _seed_native_capture()  # effort vocabulary: low, medium, max, high, ultra
-    merged = catalog.render_merged_catalog()
-    clamped = next(
-        m for m in merged["models"] if m["slug"] == "opencode-go/deepseek-v4-flash"
-    )
-    efforts = [level["effort"] for level in clamped["supported_reasoning_levels"]]
-    assert efforts == ["low", "medium"]
-
-
-def test_effort_clamp_skipped_without_capture() -> None:
-    state = state_dir()
-    os.makedirs(state, exist_ok=True)
-    compact = {
-        "fetched_at": "2026-08-13T00:00:00Z",
-        "etag": "test",
-        "shared_instructions": "",
-        "client_version": "0.147.0",
-        "models": [
-            {
-                "slug": "deepseek-v4-flash",
-                "display_name": "DeepSeek V4 Flash",
-                "supported_reasoning_levels": [{"effort": "ultra-super", "description": "x"}],
-            }
-        ],
-    }
-    with open(os.path.join(state, catalog.STATE_COMPACT_NAME), "w") as handle:
-        json.dump(compact, handle)
+    _seed_native_capture()  # native vocabulary is low/medium/max/high/ultra
     merged = catalog.render_merged_catalog()
     entry = next(
         m for m in merged["models"] if m["slug"] == "opencode-go/deepseek-v4-flash"
     )
-    assert [level["effort"] for level in entry["supported_reasoning_levels"]] == ["ultra-super"]
+    assert entry["supported_reasoning_levels"] == levels

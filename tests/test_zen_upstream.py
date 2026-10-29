@@ -994,7 +994,7 @@ class TestStreamErrorHandling:
             raise http_error(429, body=body, retry_after="3")
 
         with mock.patch("urllib.request.urlopen", side_effect=rate_limited), \
-             mock.patch("opencode_go_proxy.streaming.time.sleep"):
+             mock.patch("opencode_go_proxy.upstream.time.sleep"):
             zen_upstream.handle_zen_responses_request(handler, zen_payload(), make_config(), "req")
 
         assert handler.status == 429

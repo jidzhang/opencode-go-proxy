@@ -37,7 +37,6 @@ from .go_upstream import GO_PROVIDER
 from .meter import record_usage_event
 from .opencode_session import opencode_session_headers
 from .protocol import (
-    DEFAULT_MODEL,
     flatten_content,
     new_response_id,
     output_text_from_items,
@@ -84,9 +83,10 @@ COMPACTION_PREFIX = "kcr1:"
 # compactOutput: keep the tail (most recent) of the conversation.
 TRANSCRIPT_BUDGET = 80_000
 
-# When the summarization call returns no text, the compaction item still
-# needs a meaningful payload (mirrors the router's "(no summary available)").
-PLACEHOLDER_SUMMARY = "(no summary available)"
+# A 200 whose body carries no text is a failed compaction, not an empty one:
+# a checkpoint with no content would silently discard the conversation it was
+# asked to preserve, so the turn surfaces an explicit error instead.
+EMPTY_SUMMARY_ERROR = "compaction model returned no summary text"
 
 
 def encode_summary(summary: str) -> str:
@@ -122,12 +122,36 @@ def has_compaction_trigger(payload: Json) -> bool:
     return isinstance(last, dict) and last.get("type") in V2_TRIGGER_TYPES
 
 
-def render_transcript(input_value: Any, budget: int = TRANSCRIPT_BUDGET) -> str:
-    """Flatten the input items to plain text, skipping trigger items.
+def _item_text(item: Any) -> str:
+    """Render one input item for the compaction transcript, tools included.
 
-    Each item's content is flattened with :func:`protocol.flatten_content` and
-    joined; the result is bounded to the most recent ``budget`` characters
-    (the tail), mirroring codex-router's compactOutput budget.
+    Message items keep their flattened content. A function_call renders as its
+    name plus arguments and a function_call_output as its output, so tool
+    traffic survives compaction instead of silently vanishing from the summary
+    the next model resumes from.
+    """
+    if not isinstance(item, dict):
+        return flatten_content(item)
+    item_type = item.get("type")
+    if item_type == "function_call":
+        name = item.get("name") or ""
+        namespace = item.get("namespace")
+        full = f"{namespace}__{name}" if namespace else name
+        return f"[tool call] {full} {item.get('arguments') or '{}'}"
+    if item_type == "function_call_output":
+        return f"[tool result] {flatten_content(item.get('output'))}"
+    if item_type == "reasoning":
+        return ""
+    return flatten_content(item.get("content"))
+
+
+def render_transcript(input_value: Any, budget: int = TRANSCRIPT_BUDGET) -> str:
+    """Flatten the input items to transcript text, skipping trigger items.
+
+    Each item is rendered by :func:`_item_text` (message content, tool calls,
+    and tool results) and joined; the result is bounded to the most recent
+    ``budget`` characters (the tail), mirroring codex-router's compactOutput
+    budget.
     """
     if isinstance(input_value, str):
         items: list[Any] = [input_value]
@@ -139,7 +163,7 @@ def render_transcript(input_value: Any, budget: int = TRANSCRIPT_BUDGET) -> str:
     for item in items:
         if isinstance(item, dict) and item.get("type") in V2_TRIGGER_TYPES:
             continue
-        text = flatten_content(item.get("content") if isinstance(item, dict) else item)
+        text = _item_text(item)
         if text:
             parts.append(text)
     transcript = "\n\n".join(parts)
@@ -156,12 +180,9 @@ def _responses_text(response: Json) -> str:
     return output_text_from_items(response.get("output", [])).strip()
 
 
-def _summarize_go(model: str, transcript: str, config: ProxyConfig, request_id: str) -> tuple[str, Any, Any, Any, int]:
-    """One non-stream OpenCode Go summarization call through the model's family."""
-    bare = normalize_model_slug(model)
-    family = go_family_for(bare)
-    api_key = resolve_api_key(config, request_id)
-    payload: Json = {
+def _compact_request_payload(model: str, transcript: str) -> Json:
+    """Two-message summarization input shared by the go/zen paths."""
+    return {
         "model": model,
         "input": [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": transcript}]},
@@ -169,6 +190,23 @@ def _summarize_go(model: str, transcript: str, config: ProxyConfig, request_id: 
         ],
         "stream": False,
     }
+
+
+def _translated_summary(value: Json, family: str, model: str) -> tuple[str, Any, Any, Any]:
+    """Decode one family response to (summary, input, output, total); error on empty."""
+    summary = _responses_text(_translate_response(value, family, model))
+    if not summary:
+        raise ProxyError(HTTPStatus.BAD_GATEWAY, EMPTY_SUMMARY_ERROR)
+    inp, outp, total = _zen_tokens(value, family)
+    return summary, inp, outp, total
+
+
+def _summarize_go(model: str, transcript: str, config: ProxyConfig, request_id: str) -> tuple[str, Any, Any, Any, int]:
+    """One non-stream OpenCode Go summarization call through the model's family."""
+    bare = normalize_model_slug(model)
+    family = go_family_for(bare)
+    api_key = resolve_api_key(config, request_id)
+    payload = _compact_request_payload(model, transcript)
     url, body, headers = _build_family_request(
         payload,
         family,
@@ -207,8 +245,7 @@ def _summarize_go(model: str, transcript: str, config: ProxyConfig, request_id: 
             headers=exc.headers,
             body=exc.body,
         ) from exc
-    summary = _responses_text(_translate_response(value, family, model)) or PLACEHOLDER_SUMMARY
-    inp, outp, total = _zen_tokens(value, family)
+    summary, inp, outp, total = _translated_summary(value, family, model)
     return summary, inp, outp, total, retries
 
 
@@ -217,22 +254,14 @@ def _summarize_zen(model: str, transcript: str, config: ProxyConfig, request_id:
     bare_id = bare_zen_id(model)
     family = zen_family_for(bare_id)
     api_key = resolve_api_key(config, request_id)
-    zen_payload: Json = {
-        "model": model,
-        "input": [
-            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": transcript}]},
-            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": COMPACT_PROMPT}]},
-        ],
-        "stream": False,
-    }
+    zen_payload = _compact_request_payload(model, transcript)
     url, body, headers = _build_zen_request(
         zen_payload, family, bare_id, api_key, stream=False, session_model=model
     )
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
     trace("compaction.summarize", level="debug", request_id=request_id, target="zen", model=bare_id, transcript_chars=len(transcript))
     value, retries = _zen_post(url, raw_payload, headers, config, request_id)
-    summary = _responses_text(_translate_response(value, family, model)) or PLACEHOLDER_SUMMARY
-    inp, outp, total = _zen_tokens(value, family)
+    summary, inp, outp, total = _translated_summary(value, family, model)
     return summary, inp, outp, total, retries
 
 
@@ -276,7 +305,7 @@ def _send_json(handler: Any, payload: Json) -> None:
 
 
 def _write_compaction_sse(handler: Any, model: str, item: Json) -> None:
-    """Stream the v2 compaction turn: created → added → done → completed.
+    """Stream the v2 compaction turn: created -> added -> done -> completed.
 
     Event order mirrors codex-router's writeCompactionSse plus the
     ``response.output_item.added`` the app's v2 collector expects: the item
@@ -328,7 +357,13 @@ def handle_compaction(
     """
     started = time.time()
     v2 = path not in COMPACT_PATHS
-    model = payload.get("model") or DEFAULT_MODEL
+    model = payload.get("model")
+    if not isinstance(model, str) or not model:
+        raise ProxyError(
+            HTTPStatus.BAD_REQUEST,
+            "model must be a non-empty string",
+            error_type="invalid_request_error",
+        )
     provider = ZEN_PROVIDER if route_target(model) == "zen" else GO_PROVIDER
     try:
         summary, inp, outp, total, retries = _summarize(payload, model, config, request_id)

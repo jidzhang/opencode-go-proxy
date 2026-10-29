@@ -13,8 +13,14 @@ echo [restart] step 1/3: stopping all 19999 listeners ...
 for /f "tokens=2 delims==" %%p in ('wmic process where "name='uv.exe' and commandline like '%%opencode-go-proxy%%'" get processid /value 2^>nul ^| find "="') do (
   taskkill /F /T /PID %%p >nul 2>&1
 )
+rem Kill only listeners that are this repo's own venv proxy; an unrelated
+rem process on the port is reported and left alone.
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":19999" ^| findstr LISTENING') do (
-  taskkill /F /T /PID %%p >nul 2>&1
+  tasklist /fi "PID eq %%p" /fo csv /nh 2>nul | findstr /i "opencode-go-proxy" >nul 2>&1 && (
+    taskkill /F /T /PID %%p >nul 2>&1
+  ) || (
+    echo [restart] port 19999 is held by a foreign process ^(PID %%p^); not killing it. >&2
+  )
 )
 
 set FREED=0

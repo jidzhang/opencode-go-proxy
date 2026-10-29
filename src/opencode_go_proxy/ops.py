@@ -33,7 +33,6 @@ from typing import Any, Protocol
 from . import __version__, secrets
 from .config import ProxyConfig, resolve_chat_base_url
 from .meter import usage_events_path
-from .protocol import DEFAULT_MODEL
 
 Json = dict[str, Any]
 
@@ -47,6 +46,7 @@ HEALTH_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}/health"
 # (for example port 8790) when the live 8787 agent must not be touched.
 PROXY_BASE_URL_ENV = "OPENCODE_GO_PROXY_BASE_URL"
 DEFAULT_PROXY_BASE_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
+SMOKE_MODEL_ENV = "OPENCODE_GO_PROXY_SMOKE_MODEL"
 SMOKE_MARKER = "OPENCODE_GO_SMOKE_OK"
 
 SKILLS_DIR_ENV = "OPENCODE_GO_PROXY_SKILLS_DIR"
@@ -331,12 +331,25 @@ def doctor(argv: list[str] | None = None) -> int:
     return 0 if report["ok"] else 1
 
 
+def _flag_value(argv: list[str], name: str) -> str | None:
+    """Value following ``name`` on the command line, or None."""
+    try:
+        i = argv.index(name)
+    except ValueError:
+        return None
+    if i + 1 < len(argv):
+        return argv[i + 1]
+    return None
+
+
 def _proxy_base_url(argv: list[str]) -> str:
     base = os.environ.get(PROXY_BASE_URL_ENV) or DEFAULT_PROXY_BASE_URL
-    if "--base-url" in argv:
+    try:
         i = argv.index("--base-url")
-        if i + 1 < len(argv):
-            base = argv[i + 1]
+    except ValueError:
+        return base.rstrip("/")
+    if i + 1 < len(argv):
+        base = argv[i + 1]
     return base.rstrip("/")
 
 
@@ -352,12 +365,24 @@ def _response_text(payload: Json) -> str:
 
 
 def smoke_test(argv: list[str] | None = None) -> int:
-    """Send one marker prompt through the local proxy; non-zero on failure."""
+    """Send one marker prompt through the local proxy; non-zero on failure.
+
+    The model is required: the proxy no longer substitutes a default, so the
+    operator names what to exercise with ``--model <slug>`` (or
+    ``OPENCODE_GO_PROXY_SMOKE_MODEL``).
+    """
     argv = argv or []
     base = _proxy_base_url(argv)
+    model = os.environ.get(SMOKE_MODEL_ENV) or _flag_value(argv, "--model")
+    if not model:
+        sys.stdout.write(
+            f"smoke-test requires --model <slug> (or {SMOKE_MODEL_ENV}); "
+            "the proxy has no default model\n"
+        )
+        return 2
     marker = SMOKE_MARKER
     payload = json.dumps({
-        "model": DEFAULT_MODEL,
+        "model": model,
         "input": f"Reply with exactly {marker} and nothing else.",
         "stream": False,
     }, separators=(",", ":")).encode("utf-8")
@@ -379,7 +404,7 @@ def smoke_test(argv: list[str] | None = None) -> int:
         return 1
     text = _response_text(value)
     if marker in text:
-        sys.stdout.write(f"smoke-test OK: model={value.get('model', DEFAULT_MODEL)} marker={marker} received\n")
+        sys.stdout.write(f"smoke-test OK: model={value.get('model', model)} marker={marker} received\n")
         return 0
     sys.stdout.write(f"smoke-test FAIL: completed response missing marker {marker!r}; got {text[:200]!r}\n")
     return 1

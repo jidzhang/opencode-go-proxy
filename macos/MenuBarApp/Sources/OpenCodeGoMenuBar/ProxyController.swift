@@ -23,11 +23,14 @@ struct CLIResult {
 enum ProxySourceResolver {
     static let defaultsKey = "proxySource"
 
-    /// The pinned source baked into this build (bumped at release time).
-    static let compiledSource = "git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.10"
+    /// Install source this build falls back to when the operator has not set
+    /// one. This fork owns its own releases; nothing here points at anyone
+    /// else's repository.
+    static let fallbackProxySource = "git+https://github.com/jidzhang/opencode-go-proxy"
 
-    /// A defaults override wins over the compiled pin; an empty or missing
-    /// value falls back to `fallbackProxySource` (the compiled pin).
+    /// A defaults override wins over the fallback; an empty or missing value
+    /// falls back to `fallbackProxySource`. Set the override to a
+    /// "path:<directory>" form to run a local checkout.
     static func resolve(defaults: UserDefaults, fallbackProxySource: String) -> String {
         if let override = defaults.object(forKey: defaultsKey) as? String, !override.isEmpty {
             return override
@@ -35,11 +38,11 @@ enum ProxySourceResolver {
         return fallbackProxySource
     }
 
-    /// Install source pinned to a release tag, e.g. "0.4.8" →
-    /// "git+https://github.com/kartikkabadi/opencode-go-proxy@v0.4.8".
+    /// Install source pinned to a release tag, e.g. "0.4.8" ->
+    /// "git+https://github.com/jidzhang/opencode-go-proxy@v0.4.8".
     static func source(pinning version: String) -> String {
         let tag = version.hasPrefix("v") ? version : "v" + version
-        return "git+https://github.com/kartikkabadi/opencode-go-proxy@\(tag)"
+        return "git+https://github.com/jidzhang/opencode-go-proxy@\(tag)"
     }
 
     /// The "vX.Y.Z" tag a source string points at, or nil when unpinned.
@@ -67,7 +70,7 @@ final class ProxyController {
         URL(string: "http://127.0.0.1:\(state.port)/health")!
     }
 
-    private static let proxySource = ProxySourceResolver.compiledSource
+    private static let proxySource = ProxySourceResolver.fallbackProxySource
     private static let cliLogName = "opencode-go-proxy-cli.log"
     private static let cliLogTailLimit = 600
     private static let configMarker = "# BEGIN opencode-go-proxy-managed"
@@ -94,7 +97,7 @@ final class ProxyController {
         state = ProxyState(isRunning: false, isStarting: true, isHealthy: false, port: state.port)
 
         // Single-port guard: if another process already owns the port, refuse
-        // to spawn a second one — except the legacy launchd agent this app
+        // to spawn a second one - except the legacy launchd agent this app
         // replaced, which is migrated (unloaded) automatically once.
         if portIsInUse() {
             if oldLaunchdJobLoaded() {
@@ -135,13 +138,16 @@ final class ProxyController {
             return
         }
 
+        // No --chat-base-url here on purpose: passing the flag would override
+        // OPENCODE_GO_BASE_URL / OPENCODE_ZEN_BASE_URL silently. The proxy
+        // resolves its own documented chain, so an operator's configured
+        // upstream always wins.
         let argv: [String] = [
             uvx,
             "--from", effectiveProxySource,
             "opencode-go-proxy",
             "--bind", "127.0.0.1",
             "--port", "\(state.port)",
-            "--chat-base-url", "https://opencode.ai/zen/go/v1",
         ]
         let pid = spawnInGroup(argv: argv, stdoutFD: logFD, stderrFD: errFD,
                                env: childEnvironment())
@@ -202,6 +208,10 @@ final class ProxyController {
 
     /// Tag ("v0.4.8") the app launches the child with, or nil when unpinned.
     var activePin: String? { ProxySourceResolver.pinTag(from: effectiveProxySource) }
+
+    /// Human-readable install source for the update confirmation dialog, so
+    /// the operator always sees whose code they are about to run.
+    var resolvedSourceForDisplay: String { effectiveProxySource }
 
     /// Install `version` (e.g. "0.4.8"): persist the pinned source for the
     /// next launch, swap the in-memory pin, then restart the child so the new

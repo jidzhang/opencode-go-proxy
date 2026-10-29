@@ -5,7 +5,6 @@ import unittest
 from unittest import mock
 
 from opencode_go_proxy import protocol
-from opencode_go_proxy.codex_tools import load_snapshot_tools
 from opencode_go_proxy.protocol import (
     cache_stats_from_usage,
     chat_completion_to_response,
@@ -63,7 +62,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(stats["messages"]["reasoning_items_dropped"], 1)
         # web_search_preview is translated to a callable function (not dropped)
         # and the codex_app snapshot merges into any tools-bearing request.
-        self.assertEqual(stats["tools"]["forwarded_tools"], 2 + len(load_snapshot_tools()))
+        # Tool merge is opt-in; the default forwards only caller tools.
+        self.assertEqual(stats["tools"]["forwarded_tools"], 2)
         self.assertEqual(stats["tools"]["dropped_tools"], 0)
         self.assertIn("web_search_preview", [t["function"]["name"] for t in chat["tools"]])
 
@@ -87,7 +87,7 @@ class ProtocolTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(stats["tools"]["forwarded_tools"], 1 + len(load_snapshot_tools()))
+        self.assertEqual(stats["tools"]["forwarded_tools"], 1)
         self.assertEqual(stats["tools"]["dropped_tools"], 0)
         self.assertEqual(chat["tools"][0]["type"], "function")
         function = chat["tools"][0]["function"]
@@ -150,7 +150,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(stats["messages"]["reasoning_items_replayed"], 1)
         self.assertEqual(stats["messages"]["reasoning_items_dropped"], 0)
 
-    def test_assistant_text_between_tool_call_and_output_is_dropped_for_strict_chat_shape(self) -> None:
+    def test_assistant_text_between_tool_call_and_output_is_preserved(self) -> None:
         chat, _model, _stats = responses_payload_to_chat_payload(
             {
                 "model": "deepseek-v4-pro",
@@ -178,7 +178,10 @@ class ProtocolTests(unittest.TestCase):
 
         assistant = chat["messages"][1]
         self.assertEqual(assistant["role"], "assistant")
-        self.assertEqual(assistant["content"], "")
+        # The text the caller wrote between the call and its output must
+        # survive translation: dropping it silently deleted user-visible
+        # history from every tool-loop turn.
+        self.assertEqual(assistant["content"], "Let me inspect the test.")
         self.assertEqual(assistant["reasoning_content"], "Need to read files.")
         self.assertEqual(assistant["tool_calls"][0]["id"], "call_1")
         self.assertEqual(chat["messages"][2]["role"], "tool")
@@ -323,7 +326,8 @@ class ProtocolTests(unittest.TestCase):
         tool_names = [t["function"]["name"] for t in chat["tools"]]
         self.assertIn("mcp__computer_use__click", tool_names)
         self.assertIn("mcp__computer_use__take_screenshot", tool_names)
-        self.assertEqual(stats["tools"]["forwarded_tools"], 2 + len(load_snapshot_tools()))
+        # Tool merge is opt-in; the default forwards only caller tools.
+        self.assertEqual(stats["tools"]["forwarded_tools"], 2)
         self.assertEqual(stats["tools"]["dropped_tools"], 0)
 
 

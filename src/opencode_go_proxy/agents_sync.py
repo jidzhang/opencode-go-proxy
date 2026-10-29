@@ -85,7 +85,7 @@ def sync_agents() -> dict[str, object]:
 
     Returns {"path", "written", "unchanged", "removed", "collisions",
     "catalog"}. A target file that exists without the ownership marker is
-    never overwritten — it is reported under "collisions" and left untouched.
+    never overwritten - it is reported under "collisions" and left untouched.
     When the catalog is unreadable nothing is written or removed, so a failed
     refresh can never wipe the agent set.
     """

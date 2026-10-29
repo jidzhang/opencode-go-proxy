@@ -7,20 +7,20 @@ before they leave this module.
 
 Levels
 ------
-Every record carries a ``level`` — ``debug``, ``info``, ``warn`` or ``error``:
+Every record carries a ``level`` - ``debug``, ``info``, ``warn`` or ``error``:
 
-* ``debug`` — per-request routine telemetry (received/converted/done,
+* ``debug`` - per-request routine telemetry (received/converted/done,
   upstream start/done, catalog refresh ticks). The bulk of the stream.
-* ``info`` — lifecycle milestones and rare routing decisions (server
+* ``info`` - lifecycle milestones and rare routing decisions (server
   start/stop, credential source, go-reject zen fallback).
-* ``warn`` — handled failures and degradation (upstream retries/timeouts/
+* ``warn`` - handled failures and degradation (upstream retries/timeouts/
   errors, empty-stream retries, image or reasoning fallbacks, refresh
   skipped).
-* ``error`` — a request or the process itself failed outright (handler
+* ``error`` - a request or the process itself failed outright (handler
   crash, empty-stream exhaustion, start refused).
 
 ``OPENCODE_GO_PROXY_LOG_LEVEL`` sets the minimum emitted level (default
-``info`` while the proxy is under active debugging — flip to ``debug`` for
+``info`` while the proxy is under active debugging - flip to ``debug`` for
 per-request telemetry, or back to ``warn`` once debugging wraps up). Set
 ``OPENCODE_GO_PROXY_TRACE=0`` to disable tracing entirely.
 

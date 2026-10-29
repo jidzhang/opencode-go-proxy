@@ -289,6 +289,20 @@ class TestSnapshotLoad:
 
 
 class TestMerge:
+    @pytest.fixture(autouse=True)
+    def _opt_in_merge(self) -> None:
+        # The merge is opt-in; these tests exercise the opted-in behaviour.
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_MERGE_CODEX_APP_TOOLS": "1"}):
+            yield
+
+    def test_off_by_default_returns_the_caller_tool_list(self) -> None:
+        request_tools = [
+            {"type": "function", "name": "exec_command", "description": "x", "parameters": {"type": "object"}}
+        ]
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENCODE_GO_PROXY_MERGE_CODEX_APP_TOOLS", None)
+            assert merge_codex_app_tools(request_tools) is request_tools
+
     def test_appends_full_snapshot_when_request_has_none(self) -> None:
         request_tools = [
             {"type": "function", "name": "exec_command", "description": "x", "parameters": {"type": "object"}}
@@ -349,6 +363,13 @@ class TestMerge:
 
 
 class TestSpawnModelInheritance:
+    def test_kill_switch_leaves_arguments_untouched(self) -> None:
+        # Inheritance is the default routing policy; the env var turns it off.
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_INJECT_SESSION_MODEL": "0"}):
+            payload = payload_with(thread_call(arguments="{}"))
+            result = inject_session_model(payload, SESSION_MODEL)
+        assert result["input"][0]["arguments"] == "{}"
+
     def test_create_thread_without_model_injects_session_model(self) -> None:
         result = inject_session_model(payload_with(thread_call(arguments="{}")), SESSION_MODEL)
         assert json.loads(result["input"][0]["arguments"]) == {"model": SESSION_MODEL}

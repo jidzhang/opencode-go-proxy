@@ -42,24 +42,23 @@ from .meter import (
 )
 from .passthrough import _relay_stream, _write_empty_stream_error, is_stream_terminal
 from .protocol import (
-    DEFAULT_MODEL,
+    ANTHROPIC_THINKING_LEVELS,
     _normalize_image_url,
     chat_completion_to_response,
     chat_message_to_response_output,
+    drop_dangling_function_calls,
+    env_flag,
+    extract_reasoning_effort,
     flatten_content,
     inject_session_model,
+    maybe_detox_payload,
     model_context_window,
     new_response_id,
     normalize_usage,
     now_unix,
     responses_input_to_chat_messages,
     responses_payload_to_chat_payload,
-    ANTHROPIC_THINKING_LEVELS,
     responses_tools_to_chat_tools,
-    drop_dangling_function_calls,
-    env_flag,
-    extract_reasoning_effort,
-    maybe_detox_payload,
     responses_tools_to_function_tools,
     restore_namespaced_function_calls,
     strip_message_phase,
@@ -67,8 +66,8 @@ from .protocol import (
 from .secrets import resolve_api_key
 from .streaming import (
     KeepaliveWriter,
-    _ConnectFailed,
     _client_gone,
+    _ConnectFailed,
     _open_upstream_stream,
     keepalive_sec,
 )
@@ -657,12 +656,31 @@ def responses_payload_to_anthropic_payload(payload: Json) -> Json:
     effort = extract_reasoning_effort(payload)
     budget = None if mid_tool_loop else ANTHROPIC_THINKING_BUDGETS.get(effort)
     if budget is not None:
-        # Anthropic requires budget_tokens < max_tokens (min 1024): raise the
-        # cap to make room rather than letting the gateway reject the whole
-        # turn because the caller's max_output_tokens only covered the answer.
-        body["max_tokens"] = max(int(body["max_tokens"]), budget + 1024)
+        # Anthropic requires budget_tokens < max_tokens (min 1024). An explicit
+        # caller cap is respected as-is and the upstream rejection surfaces if
+        # the budget cannot fit; only the proxy-applied default is raised to
+        # make room. Every adjustment is traced so it is never silent.
+        explicit_cap = payload.get("max_output_tokens")
+        if explicit_cap is None:
+            current = int(body["max_tokens"])
+            needed = budget + 1024
+            if current < needed:
+                trace(
+                    "request.anthropic_max_tokens_adjusted", level="debug",
+                    message="raised the proxy default max_tokens so the thinking budget fits",
+                    from_tokens=current, to_tokens=needed, budget_tokens=budget,
+                )
+                body["max_tokens"] = needed
         body["thinking"] = {"type": "enabled", "budget_tokens": budget}
-    elif payload.get("temperature") is not None:
+    if mid_tool_loop and effort in ANTHROPIC_THINKING_BUDGETS:
+        trace(
+            "request.anthropic_thinking_suppressed", level="debug",
+            message="serving a mid-tool-loop turn without extended thinking "
+                    "(the gateway rejects thinking-on turns whose history has "
+                    "no thinking blocks to replay)",
+            effort=effort,
+        )
+    if budget is None and payload.get("temperature") is not None:
         # Extended thinking replaces sampling controls upstream (temperature
         # may only be 1 with thinking enabled), so temperature only rides
         # along when thinking stays off.
@@ -805,7 +823,17 @@ def _sanitize_gemini_schema(node: Any) -> Any:
     return node
 
 
+# Wire-shape constraint, not a product choice: the Go Google gateway answers
+# an empty-body 400 for any request whose final content is a model turn or a
+# non-plain-text user turn, so those shapes need one extra user text content to
+# be expressible at all. The switch exists so an operator can see the raw
+# rejection while debugging; the default keeps the family usable.
 _GEMINI_TAIL_TEXT = "Continue."
+_GEMINI_TAIL_ENV = "OPENCODE_GO_PROXY_GEMINI_CONTINUE_TAIL"
+
+
+def _gemini_tail_enabled() -> bool:
+    return env_flag(_GEMINI_TAIL_ENV, default_on=True)
 
 
 def _is_plain_text_tail(content: Json | None) -> bool:
@@ -832,7 +860,14 @@ def _ensure_gemini_user_text_tail(contents: list[Json]) -> None:
     """
     if _is_plain_text_tail(contents[-1] if contents else None):
         return
+    if not _gemini_tail_enabled():
+        return
     contents.append({"role": "user", "parts": [{"text": _GEMINI_TAIL_TEXT}]})
+    trace(
+        "request.gemini_continue_tail", level="debug",
+        message="appended a trailing user text turn the caller did not send "
+                "(Go Google gateway rejects these tail shapes with an empty-body 400)",
+    )
 
 
 def responses_payload_to_gemini_payload(payload: Json) -> Json:
@@ -956,7 +991,7 @@ def gemini_payload_debug(body: Json) -> Json:
 
     Records the contents role sequence, per-content part kinds, the
     functionDeclaration names, and every functionCall/functionResponse name
-    on the wire — the fields a strict gateway rejects when a name is unknown
+    on the wire - the fields a strict gateway rejects when a name is unknown
     or a call/response pair is unpaired. Argument and response values are
     never included (they can carry user content).
     """
@@ -1054,6 +1089,20 @@ def _gemini_tool_config(choice: Any, declarations: list[Json]) -> Json | None:
     return {"functionCallingConfig": config}
 
 
+def _completed_response(model: str, output: list[Json], text_parts: list[str], normalized_usage: Json | None) -> Json:
+    """One completed Responses envelope shared by the family translators."""
+    return {
+        "id": new_response_id(),
+        "object": "response",
+        "created_at": now_unix(),
+        "status": "completed",
+        "model": model,
+        "output": output,
+        "output_text": "".join(text_parts),
+        "usage": normalized_usage,
+    }
+
+
 def _anthropic_to_response(value: Json, model: str) -> Json:
     """Anthropic messages response to the Responses object shape."""
     fake, text_parts = _anthropic_content_to_fake(value.get("content"))
@@ -1067,16 +1116,17 @@ def _anthropic_to_response(value: Json, model: str) -> Json:
         normalized_usage = normalize_usage(
             {"input_tokens": inp, "output_tokens": outp, "total_tokens": total}
         )
-    return {
-        "id": new_response_id(),
-        "object": "response",
-        "created_at": now_unix(),
-        "status": "completed",
-        "model": model,
-        "output": output,
-        "output_text": "".join(text_parts),
-        "usage": normalized_usage,
-    }
+    return _completed_response(model, output, text_parts, normalized_usage)
+
+
+def _fake_chat_message(text_parts: list[str], tool_calls: list[Json]) -> tuple[Json, list[str]]:
+    """(fake chat message, text parts) shared by the family content translators."""
+    fake: Json = {}
+    if text_parts:
+        fake["content"] = "\n".join(text_parts)
+    if tool_calls:
+        fake["tool_calls"] = tool_calls
+    return fake, text_parts
 
 
 def _anthropic_content_to_fake(content: Any) -> tuple[Json, list[str]]:
@@ -1109,12 +1159,7 @@ def _anthropic_content_to_fake(content: Any) -> tuple[Json, list[str]]:
                     },
                 }
             )
-    fake: Json = {}
-    if text_parts:
-        fake["content"] = "\n".join(text_parts)
-    if tool_calls:
-        fake["tool_calls"] = tool_calls
-    return fake, text_parts
+    return _fake_chat_message(text_parts, tool_calls)
 
 
 def _gemini_to_response(value: Json, model: str) -> Json:
@@ -1130,16 +1175,7 @@ def _gemini_to_response(value: Json, model: str) -> Json:
         normalized_usage = normalize_usage(
             {"input_tokens": inp, "output_tokens": outp, "total_tokens": total}
         )
-    return {
-        "id": new_response_id(),
-        "object": "response",
-        "created_at": now_unix(),
-        "status": "completed",
-        "model": model,
-        "output": output,
-        "output_text": "".join(text_parts),
-        "usage": normalized_usage,
-    }
+    return _completed_response(model, output, text_parts, normalized_usage)
 
 
 def _gemini_content_to_fake(value: Json) -> tuple[Json, list[str]]:
@@ -1171,12 +1207,7 @@ def _gemini_content_to_fake(value: Json) -> tuple[Json, list[str]]:
                     },
                 }
             )
-    fake: Json = {}
-    if text_parts:
-        fake["content"] = "\n".join(text_parts)
-    if tool_calls:
-        fake["tool_calls"] = tool_calls
-    return fake, text_parts
+    return _fake_chat_message(text_parts, tool_calls)
 
 
 def _translate_response(value: Json, family: str, model: str) -> Json:
@@ -1313,31 +1344,18 @@ def call_family_responses(
             url, raw_payload, headers, config, request_id, provider=provider
         )
     except ProxyError as exc:
-        status = (
-            HTTPStatus.BAD_GATEWAY
-            if exc.upstream_status is not None
-            and exc.upstream_status >= HTTPStatus.INTERNAL_SERVER_ERROR
-            else exc.status
-        )
+        # The upstream status is forwarded, not relabelled: a 500/503 from the
+        # provider means something different from a local gateway failure, and
+        # the caller is entitled to the real code (retry-after is carried on
+        # exc.headers). Local transport failures have no upstream status and
+        # keep their 502/504.
         _meter_provider(
             model,
             started,
-            int(status),
+            int(exc.status),
             provider=provider,
             retries=exc.retries or None,
         )
-        if (
-            exc.upstream_status is not None
-            and exc.upstream_status >= HTTPStatus.INTERNAL_SERVER_ERROR
-        ):
-            raise ProxyError(
-                HTTPStatus.BAD_GATEWAY,
-                f"{provider} upstream HTTP {exc.upstream_status}: {exc.message}",
-                retries=exc.retries,
-                upstream_status=exc.upstream_status,
-                headers=exc.headers,
-                body=exc.body,
-            ) from exc
         raise
     if family == "openai_chat":
         record_cache(config.cache_tracker, body.get("model"), value.get("usage"))
@@ -1363,7 +1381,13 @@ def call_family_responses(
 
 def call_zen_responses(payload: Json, config: ProxyConfig, request_id: str) -> Json:
     """Non-stream Responses call through the routed Zen family."""
-    model = payload.get("model") or DEFAULT_MODEL
+    model = payload.get("model")
+    if not isinstance(model, str) or not model:
+        raise ProxyError(
+            HTTPStatus.BAD_REQUEST,
+            "model must be a non-empty string",
+            error_type="invalid_request_error",
+        )
     bare_id = bare_zen_id(model)
     return call_family_responses(
         payload,
@@ -2427,7 +2451,13 @@ def handle_family_responses_request(
 
 def handle_zen_responses_request(handler: Any, payload: Json, config: ProxyConfig, request_id: str) -> None:
     """Serve a /v1/responses request for a zen-routed model."""
-    model = payload.get("model") or DEFAULT_MODEL
+    model = payload.get("model")
+    if not isinstance(model, str) or not model:
+        raise ProxyError(
+            HTTPStatus.BAD_REQUEST,
+            "model must be a non-empty string",
+            error_type="invalid_request_error",
+        )
     ensure_zen_slug(model)
     bare_id = bare_zen_id(model)
     handle_family_responses_request(
@@ -2453,7 +2483,13 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
     answers 200; non-200 upstream answers relay their own status and body.
     """
     started = time.time()
-    model = payload.get("model") or DEFAULT_MODEL
+    model = payload.get("model")
+    if not isinstance(model, str) or not model:
+        raise ProxyError(
+            HTTPStatus.BAD_REQUEST,
+            "model must be a non-empty string",
+            error_type="invalid_request_error",
+        )
     ensure_zen_slug(model)
     bare_id = bare_zen_id(model)
     api_key = resolve_api_key(config, request_id)

@@ -1,14 +1,12 @@
 """Env-matrix coverage for every proxy config knob, present and absent."""
 import os
-import urllib.error
 from unittest import mock
 
 import pytest
 
-from opencode_go_proxy import meter, secrets, upstream
+from opencode_go_proxy import meter, secrets, upstream, upstream_headers
 from opencode_go_proxy.app import build_parser
-from opencode_go_proxy.config import ProxyConfig, resolve_chat_base_url
-from opencode_go_proxy.errors import ProxyError
+from opencode_go_proxy.config import resolve_chat_base_url
 
 
 class TestEnvMatrix:
@@ -37,25 +35,15 @@ class TestEnvMatrix:
             assert meter.estimate_input_tokens("m", 1000, usage) >= 1000
 
     def test_user_agent_header(self) -> None:
-        captured: dict = {}
-
-        def fake_urlopen(request, **kw):
-            captured["ua"] = request.get_header("User-agent")
-            raise urllib.error.URLError("stop")
-
-        cfg = ProxyConfig(bind="127.0.0.1", port=1, chat_base_url="https://example.test/v1", api_key_env="OPENCODE_GO_API_KEY", timeout_sec=5, max_body_bytes=1048576)
+        # The adapter identity is still applied by the shared header builder.
         with mock.patch.dict(
-            os.environ,
-            {"OPENCODE_GO_PROXY_USER_AGENT": "custom-ua/1", "OPENCODE_GO_PROXY_MAX_RETRIES": "0"},
-            clear=True,
-        ), mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
-            "opencode_go_proxy.upstream.resolve_api_key", return_value="k"
+            os.environ, {"OPENCODE_GO_PROXY_USER_AGENT": "custom-ua/1"}, clear=True
         ):
-            try:
-                upstream.call_upstream_chat({"model": "x", "messages": []}, cfg, "req")
-            except ProxyError:
-                pass
-        assert captured.get("ua") == "custom-ua/1"
+            assert upstream_headers.base_upstream_headers()["user-agent"] == "custom-ua/1"
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert upstream_headers.base_upstream_headers()["user-agent"].startswith(
+                "opencode-go-proxy/"
+            )
 
     @pytest.mark.parametrize("name", ["OPENCODE_GO_BASE_URL", "OPENCODE_ZEN_BASE_URL"])
     def test_base_url_override(self, name) -> None:

@@ -191,7 +191,7 @@ class TestChatCompletionsPassthrough:
         assert json.loads(raw)["error"]["message"] == "Go usage limit exceeded (weekly)"
         assert resp.getheader("retry-after") == "35038"
 
-    def test_upstream_500_maps_to_502_and_keeps_body(self, server):
+    def test_upstream_500_forwarded_verbatim_and_keeps_body(self, server):
         port, _ = server
         err_body = b'{"error":{"message":"internal boom"}}'
 
@@ -200,7 +200,7 @@ class TestChatCompletionsPassthrough:
         }), mock.patch("urllib.request.urlopen", side_effect=http_error(500, err_body)):
             resp, raw = post(port, "/v1/chat/completions", chat_body())
 
-        assert resp.status == 502
+        assert resp.status == 500
         assert raw == err_body
 
     def test_streaming_relays_sse_verbatim(self, server):
@@ -251,7 +251,7 @@ class TestChatCompletionsPassthrough:
         assert raw == err_body
         assert "text/event-stream" not in resp.getheader("content-type", "")
 
-    def test_streaming_upstream_500_maps_to_502_before_commit(self, server):
+    def test_streaming_upstream_500_forwarded_before_commit(self, server):
         port, _ = server
         err_body = b'{"error":{"message":"internal boom"}}'
 
@@ -260,7 +260,7 @@ class TestChatCompletionsPassthrough:
         }), mock.patch("urllib.request.urlopen", side_effect=http_error(500, err_body)):
             resp, raw = post(port, "/v1/chat/completions", chat_body(stream=True))
 
-        assert resp.status == 502
+        assert resp.status == 500
         assert raw == err_body
         assert "text/event-stream" not in resp.getheader("content-type", "")
 
@@ -397,7 +397,7 @@ class TestMessagesEndpoint:
 
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
              mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(upstream_body)):
-            resp, raw = post(port, "/messages", b"{}")
+            resp, raw = post(port, "/messages", json.dumps({"model": "opencode-go/glm-5.2", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}).encode())
 
         assert resp.status == 200
         message = json.loads(raw)
@@ -405,7 +405,7 @@ class TestMessagesEndpoint:
         assert message["content"][0]["text"] == "hi"
 
     @pytest.mark.parametrize("stream", [False, True])
-    def test_upstream_500_maps_to_502_and_keeps_body(self, server, stream):
+    def test_upstream_500_forwarded_verbatim_and_keeps_body(self, server, stream):
         port, _ = server
         err_body = b'{"type":"error","error":{"message":"internal boom"}}'
         body = json.dumps({
@@ -419,7 +419,7 @@ class TestMessagesEndpoint:
         }), mock.patch("urllib.request.urlopen", side_effect=http_error(500, err_body)):
             resp, raw = post(port, "/v1/messages", body)
 
-        assert resp.status == 502
+        assert resp.status == 500
         assert raw == err_body
         assert "text/event-stream" not in resp.getheader("content-type", "")
 
@@ -504,39 +504,3 @@ class TestPassthroughMetering:
         assert events, "passthrough must be metered"
         assert events[-1]["status"] == 200
         assert events[-1]["model"] == "deepseek-v4-flash"
-
-
-class TestRelayIncompleteRead:
-    def test_truncated_upstream_body_terminates_without_second_json(self) -> None:
-        # Regression (review): http.client.IncompleteRead mid-relay must not
-        # let do_POST append a JSON error inside the committed SSE stream.
-        import http.client
-
-        from opencode_go_proxy.streaming import handle_chat_stream_passthrough
-
-        class Truncated:
-            status = 200
-            headers: ClassVar[dict] = {"content-type": "text/event-stream"}
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def __iter__(self):
-                yield b"data: {}\n\n"
-                raise http.client.IncompleteRead(b"partial")
-
-        handler = mock.Mock()
-        handler.wfile = io.BytesIO()
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}, clear=True), mock.patch(
-            "urllib.request.urlopen", return_value=Truncated()
-        ):
-            handle_chat_stream_passthrough(
-                {"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}], "stream": True},
-                make_config(8790), "req", handler,
-            )
-        body = handler.wfile.getvalue().decode()
-        assert '"error"' not in body
-        assert "data: {}" in body

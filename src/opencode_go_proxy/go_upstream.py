@@ -16,7 +16,6 @@ from .go_models import ANTHROPIC_MESSAGES, GOOGLE_GEMINI, OPENAI_CHAT, go_family
 from .meter import record_usage_event
 from .opencode_session import opencode_session_headers
 from .passthrough import _relay_stream
-from .protocol import DEFAULT_MODEL
 from .secrets import resolve_api_key
 from .streaming import _ConnectFailed, _open_upstream_stream
 from .trace import trace
@@ -41,8 +40,14 @@ GO_PROVIDER = "opencode-go"
 
 
 def _client_status(status: int) -> int:
-    if status >= HTTPStatus.INTERNAL_SERVER_ERROR:
-        return HTTPStatus.BAD_GATEWAY
+    """Return the status to answer with. Upstream codes are forwarded as-is.
+
+    A provider 5xx means something different from a local gateway failure, and
+    every surface (/responses, /chat/completions, /messages) must agree on that
+    or a client retrying on 5xx behaves differently per endpoint. Local
+    transport failures never reach here: they raise ProxyError with no upstream
+    status.
+    """
     return status
 
 
@@ -114,7 +119,13 @@ def handle_go_responses_request(
 ) -> None:
     """Translate a local Responses request to its documented Go endpoint."""
     started = time.time()
-    model = payload.get("model") or DEFAULT_MODEL
+    model = payload.get("model")
+    if not isinstance(model, str) or not model:
+        raise ProxyError(
+            HTTPStatus.BAD_REQUEST,
+            "model must be a non-empty string",
+            error_type="invalid_request_error",
+        )
     bare_id, family = go_request_identity(model)
     base_url, google_auth = go_family_target(family, config)
     handle_family_responses_request(

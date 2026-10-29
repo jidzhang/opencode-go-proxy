@@ -31,7 +31,7 @@ Json = dict[str, Any]
 # mirrors point the check at a local fixture).
 GITHUB_API_ENV = "OPENCODE_GO_PROXY_GITHUB_API"
 DEFAULT_GITHUB_API = "https://api.github.com"
-RELEASES_LATEST_PATH = "/repos/kartikkabadi/opencode-go-proxy/releases/latest"
+RELEASES_LATEST_PATH = "/repos/jidzhang/opencode-go-proxy/releases/latest"
 
 # How long a cached check stays fresh; OPENCODE_GO_PROXY_UPDATE_TTL_HOURS
 # overrides the default (0 disables the cache so every call re-checks).

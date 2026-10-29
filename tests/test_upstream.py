@@ -1,44 +1,18 @@
-"""Unit tests for the shared upstream client (upstream.py)."""
+"""Unit tests for the shared retry policy and quota normalization.
 
-import http.client
-import io
+The chat-completions client these once drove was deleted with the dead
+/chat/completions translation path; the policy helpers below are still used by
+every live family call. Live retry behaviour is covered end-to-end by
+test_network_mapping (_open_upstream_stream) and test_zen_upstream (_zen_post).
+"""
+
 import json
-import os
-import urllib.error
-from http import HTTPStatus
-from unittest import mock
 
-import pytest
-
-from opencode_go_proxy.app import ProxyConfig
-from opencode_go_proxy.errors import ProxyError
-from opencode_go_proxy.secrets import clear_api_key_cache
 from opencode_go_proxy.upstream import (
-    DEFAULT_MAX_RETRIES,
-    call_upstream_chat,
-    call_upstream_chat_verbatim,
     normalize_usage_limit_error,
     retriable_http_failure,
+    retriable_http_status,
 )
-
-
-def make_config() -> ProxyConfig:
-    return ProxyConfig(
-        bind="127.0.0.1", port=8787, chat_base_url="https://up.test/v1",
-        api_key_env="OPENCODE_GO_API_KEY", timeout_sec=10, max_body_bytes=1024 * 1024,
-    )
-
-
-def chat_payload() -> dict:
-    return {"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}]}
-
-
-def http_error(code: int, retry_after: str | None = None) -> urllib.error.HTTPError:
-    hdrs = {"retry-after": retry_after} if retry_after else {}
-    return urllib.error.HTTPError(
-        "https://up.test/v1/chat/completions", code, "err", hdrs, io.BytesIO(b'{"error":"down"}')
-    )
-
 
 GO_QUOTA_BODY = json.dumps({
     "type": "error",
@@ -47,92 +21,29 @@ GO_QUOTA_BODY = json.dumps({
 }).encode("utf-8")
 
 
-def ok_response() -> mock.Mock:
-    raw = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode("utf-8")
-    return mock.Mock(status=200, headers={}, read=lambda: raw, __enter__=lambda s: s, __exit__=lambda *a: False)
+class TestRetryClassification:
+    def test_transient_statuses_are_retriable(self) -> None:
+        for code in (429, 500, 502, 503, 504):
+            assert retriable_http_status(code)
 
+    def test_client_errors_are_not_retriable(self) -> None:
+        for code in (400, 401, 403, 404, 410, 422):
+            assert not retriable_http_status(code)
 
-@pytest.fixture(autouse=True)
-def _clear_secret_cache() -> None:
-    clear_api_key_cache()
-    yield
-    clear_api_key_cache()
-
-
-class TestSessionHeader:
-    """call_upstream_chat must carry the stable x-opencode-session affinity id.
-
-    The Go gateway rejects session-less sub-calls (split-turn image
-    captioning) with MissingSessionID; today every caption burned three
-    upstream round-trips before falling back.
-    """
-
-    @staticmethod
-    def _session_id(req: urllib.request.Request) -> str | None:
-        return {k.lower(): v for k, v in req.headers.items()}.get("x-opencode-session")
-
-    def test_call_upstream_chat_sends_stable_session_header(self) -> None:
-        captured: list[urllib.request.Request] = []
-
-        def fake_urlopen(req, **kw):
-            captured.append(req)
-            return ok_response()
-
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            call_upstream_chat(chat_payload(), make_config(), "req")
-            call_upstream_chat(chat_payload(), make_config(), "req")
-
-        assert len(captured) == 2
-        first = self._session_id(captured[0])
-        assert first
-        assert self._session_id(captured[1]) == first
-
-    def test_session_header_varies_with_payload(self) -> None:
-        captured: list[urllib.request.Request] = []
-
-        def fake_urlopen(req, **kw):
-            captured.append(req)
-            return ok_response()
-
-        other = {"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "other"}]}
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            call_upstream_chat(chat_payload(), make_config(), "req")
-            call_upstream_chat(other, make_config(), "req")
-
-        assert self._session_id(captured[0]) != self._session_id(captured[1])
-
-
-class TestRetryPolicy:
-    def test_retries_on_429_then_succeeds(self) -> None:
-        calls = []
-
-        def fake_urlopen(req, **kw):
-            calls.append(req)
-            if len(calls) == 1:
-                raise http_error(429, retry_after="2")
-            return ok_response()
-
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
-             mock.patch("opencode_go_proxy.upstream.time.sleep"):
-            _value, retries = call_upstream_chat(chat_payload(), make_config(), "req")
-        assert retries == 1
-        assert len(calls) == 2
-
-    def test_go_usage_limit_is_terminal_and_normalized(self) -> None:
-        error = urllib.error.HTTPError(
-            "https://up.test/v1/chat/completions",
-            429,
-            "Too Many Requests",
-            {"retry-after": "35038"},
-            io.BytesIO(GO_QUOTA_BODY),
-        )
-
+    def test_go_usage_limit_is_terminal(self) -> None:
         assert not retriable_http_failure(429, GO_QUOTA_BODY)
+
+    def test_ordinary_rate_limit_is_retriable(self) -> None:
         assert retriable_http_failure(429, b'{"error":{"type":"rate_limit_error"}}')
 
+    def test_server_errors_ignore_the_quota_envelope(self) -> None:
+        # A 5xx is transient even when its body happens to look like a quota
+        # error: only 429 is downgraded to terminal.
+        assert retriable_http_failure(503, GO_QUOTA_BODY)
+
+
+class TestQuotaNormalization:
+    def test_go_quota_renders_as_insufficient_quota(self) -> None:
         normalized = normalize_usage_limit_error(GO_QUOTA_BODY)
         assert isinstance(normalized, bytes)
         value = json.loads(normalized)
@@ -141,123 +52,9 @@ class TestRetryPolicy:
         assert value["error"]["message"] == "Go usage limit exceeded (weekly)"
         assert b"org-test" not in normalized
 
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=error) as urlopen, \
-             pytest.raises(ProxyError) as ctx:
-            call_upstream_chat(chat_payload(), make_config(), "req")
+    def test_non_quota_body_passes_through(self) -> None:
+        assert normalize_usage_limit_error(b'{"error":{"type":"rate_limit_error"}}') is None
 
-        assert urlopen.call_count == 1
-        assert ctx.value.error_type == "insufficient_quota"
-        assert ctx.value.headers == {"retry-after": "35038"}
-
-    def test_no_retry_on_permanent_error(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=http_error(400)) as urlopen, pytest.raises(ProxyError):
-            call_upstream_chat(chat_payload(), make_config(), "req")
-        assert urlopen.call_count == 1
-
-    def test_max_retries_zero_disables_retry(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=http_error(503)) as urlopen, \
-             pytest.raises(ProxyError) as ctx:
-            call_upstream_chat(chat_payload(), make_config(), "req", max_retries=0)
-        assert urlopen.call_count == 1
-        assert ctx.value.status == HTTPStatus.SERVICE_UNAVAILABLE
-
-    def test_network_error_surfaces_502(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")) as urlopen, \
-             pytest.raises(ProxyError) as ctx:
-            call_upstream_chat(chat_payload(), make_config(), "req", max_retries=0)
-        assert urlopen.call_count == 1
-        assert ctx.value.status == HTTPStatus.BAD_GATEWAY
-
-    def test_remote_disconnected_retries_then_surfaces_502(self) -> None:
-        # RemoteDisconnected (upstream closed before response headers) is not a
-        # URLError; it must land in the transient-retry bucket, not crash.
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch(
-                 "urllib.request.urlopen",
-                 side_effect=http.client.RemoteDisconnected("no response"),
-             ) as urlopen, \
-             pytest.raises(ProxyError) as ctx:
-            call_upstream_chat(chat_payload(), make_config(), "req", max_retries=0)
-        assert urlopen.call_count == 1
-        assert ctx.value.status == HTTPStatus.BAD_GATEWAY
-
-    def test_remote_disconnected_is_retried(self) -> None:
-        responses = [http.client.RemoteDisconnected("no response"), ok_response()]
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=responses) as urlopen:
-            value, retries = call_upstream_chat(chat_payload(), make_config(), "req")
-        assert urlopen.call_count == 2
-        assert retries == 1
-        assert value["choices"][0]["message"]["content"] == "hi"
-
-    def test_timeout_propagates_to_urlopen(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", return_value=ok_response()) as urlopen:
-            call_upstream_chat(chat_payload(), make_config(), "req", timeout_sec=3.5)
-        _, kwargs = urlopen.call_args
-        assert kwargs.get("timeout") == 3.5
-
-    def test_config_timeout_default(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", return_value=ok_response()) as urlopen:
-            call_upstream_chat(chat_payload(), make_config(), "req")
-        _, kwargs = urlopen.call_args
-        assert kwargs.get("timeout") == 10  # make_config timeout_sec
-
-
-class TestCaptionBudget:
-    def test_defaults(self) -> None:
-        assert DEFAULT_MAX_RETRIES == 2
-
-
-
-class TestVerbatimPassthroughClient:
-    def test_returns_upstream_status_and_raw_body(self) -> None:
-        raw = json.dumps({"choices": [{"message": {"content": "hi"}}]}).encode("utf-8")
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", return_value=ok_response()) as urlopen:
-            status, body, retries, _content_type, _retry_after = call_upstream_chat_verbatim(chat_payload(), make_config(), "req")
-
-        assert status == 200
-        assert body == raw
-        assert retries == 0
-        urlopen.assert_called_once()
-
-    def test_retries_transient_then_relays_final_error_verbatim(self) -> None:
-        calls = []
-
-        def fake_urlopen(req, **kw):
-            calls.append(req)
-            raise http_error(429)
-
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
-             mock.patch("opencode_go_proxy.upstream.time.sleep"):
-            status, body, retries, _content_type, _retry_after = call_upstream_chat_verbatim(chat_payload(), make_config(), "req")
-
-        assert status == 429
-        assert body == b'{"error":"down"}'
-        assert retries == DEFAULT_MAX_RETRIES
-        assert len(calls) == DEFAULT_MAX_RETRIES + 1
-
-    def test_permanent_error_relayed_without_retry(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=http_error(400)) as urlopen:
-            status, body, retries, _content_type, _retry_after = call_upstream_chat_verbatim(chat_payload(), make_config(), "req")
-
-        assert status == 400
-        assert body == b'{"error":"down"}'
-        assert retries == 0
-        urlopen.assert_called_once()
-
-    def test_network_error_still_raises_proxy_error(self) -> None:
-        with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), \
-             mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")), \
-             pytest.raises(ProxyError) as ctx:
-            call_upstream_chat_verbatim(chat_payload(), make_config(), "req", max_retries=0)
-
-        assert ctx.value.status == HTTPStatus.BAD_GATEWAY
+    def test_input_type_is_preserved(self) -> None:
+        text = GO_QUOTA_BODY.decode("utf-8")
+        assert isinstance(normalize_usage_limit_error(text), str)

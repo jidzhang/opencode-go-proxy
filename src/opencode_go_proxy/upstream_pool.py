@@ -215,13 +215,13 @@ class _PooledResponse:
     def __getattr__(self, name: str) -> Any:
         return getattr(object.__getattribute__(self, "_resp"), name)
 
-    def __enter__(self) -> "_PooledResponse":
+    def __enter__(self) -> _PooledResponse:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def __iter__(self) -> "_PooledResponse":
+    def __iter__(self) -> _PooledResponse:
         return self
 
     def _guarded(self, fn: Any, *args: Any) -> Any:

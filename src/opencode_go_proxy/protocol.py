@@ -10,6 +10,7 @@ from typing import Any
 from .codex_tools import merge_codex_app_tools
 from .errors import env_flag
 from .routing import normalize_model_slug, route_target
+from .trace import trace
 
 Json = dict[str, Any]
 
@@ -87,14 +88,33 @@ def _session_spawn_name(item: Json) -> str | None:
     return name
 
 
-def inject_session_model(payload: Json, session_model: str) -> Json:
-    """Inject the session's model into create_thread calls.
+SESSION_MODEL_INJECTION_ENV = "OPENCODE_GO_PROXY_INJECT_SESSION_MODEL"
 
-    Spawned threads inherit the routed session's model instead of falling back
-    to the native Codex model (which is quota-blocked for this account). Only
-    applies when the call omits an explicit model; other tools and
-    chatgptWorkCloud targets are untouched.
+
+def session_model_injection_enabled() -> bool:
+    """Whether spawned threads inherit the session model (default on).
+
+    On by default as a routing policy: the proxy knows this session runs on a
+    routed provider while the client does not know that its native fallback is
+    unavailable here, so a create_thread call with no model would strand the
+    child thread on a backend the account cannot use. Every rewrite is traced,
+    and OPENCODE_GO_PROXY_INJECT_SESSION_MODEL=0 turns the policy off for
+    operators who want argument-level fidelity instead.
     """
+    return env_flag(SESSION_MODEL_INJECTION_ENV, default_on=True)
+
+
+def inject_session_model(payload: Json, session_model: str) -> Json:
+    """Fill a missing model in create_thread calls with the session model.
+
+    Applies only to codex_app create_thread calls whose arguments omit the
+    model entirely (or carry an empty string); an explicitly present value,
+    including null, wins. Other tools and chatgptWorkCloud targets are never
+    touched. Each rewrite emits a trace event so the deviation from the
+    caller's literal payload is observable, never silent.
+    """
+    if not session_model_injection_enabled():
+        return payload
     if not isinstance(payload, dict):
         return payload
     input_value = payload.get("input")
@@ -123,7 +143,7 @@ def inject_session_model(payload: Json, session_model: str) -> Json:
         if model is not None and model != "":
             continue
         if model is None and "model" in parsed:
-            # {"model": null} is explicitly present — leave it as-is.
+            # {"model": null} is explicitly present - leave it as-is.
             continue
         parsed["model"] = session_model
         item["arguments"] = json.dumps(parsed, sort_keys=True)
@@ -131,9 +151,14 @@ def inject_session_model(payload: Json, session_model: str) -> Json:
 
     if not changed:
         return payload
+    trace(
+        "request.session_model_injected", level="debug",
+        message="filled a missing create_thread model with the session model "
+                "(the caller's arguments were rewritten)",
+        model=session_model,
+    )
     return dict(payload)
 
-DEFAULT_MODEL = "deepseek-v4-flash"
 
 
 def _catalog_mtime() -> tuple[str, int | None]:
@@ -383,7 +408,7 @@ def responses_input_to_chat_messages(payload: Json) -> tuple[list[Json], Json]:
         nonlocal pending_assistant_content
         message: Json = {
             "role": "assistant",
-            "content": "",
+            "content": pending_assistant_content,
             "tool_calls": pending_assistant_tool_calls,
         }
         pending_assistant_content = ""
@@ -829,7 +854,7 @@ def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
     messages, message_stats = responses_input_to_chat_messages(payload)
     tools, tool_stats = responses_tools_to_chat_tools(payload.get("tools"))
 
-    incoming_model = payload.get("model", DEFAULT_MODEL)
+    incoming_model = payload.get("model") or ""
     # Detect images by scanning for actual image_url parts (not just list-shaped content).
     # Dispatch relays native slugs to the passthrough before translation; if
     # one arrives here anyway, its model is never rewritten. For opencode-go
@@ -860,6 +885,23 @@ def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
     if payload.get("max_output_tokens") is not None:
         chat_payload["max_tokens"] = payload["max_output_tokens"]
 
+    # Every other caller-set generation control the chat shape understands is
+    # forwarded verbatim. Dropping these silently changed what the caller asked
+    # for: a JSON-schema request without text.format answers in free text, and a
+    # caller-set stop/seed/penalty never reached the model.
+    for key in ("stop", "seed", "presence_penalty", "frequency_penalty", "logprobs",
+                "top_logprobs", "parallel_tool_calls", "metadata"):
+        value = payload.get(key)
+        if value is not None:
+            chat_payload[key] = value
+
+    # Responses carries structured output as text.format; the chat shape spells
+    # the same thing response_format. Pass the schema through unchanged rather
+    # than letting the model answer in prose.
+    text_config = payload.get("text")
+    if isinstance(text_config, dict) and text_config.get("format") is not None:
+        chat_payload["response_format"] = text_config["format"]
+
     effort = extract_reasoning_effort(payload)
     if effort is not None:
         chat_payload["reasoning_effort"] = effort
@@ -877,15 +919,21 @@ def chat_completion_to_response(
     chat: Json, request_model: str | None = None, *, estimated_input_tokens: int | None = None
 ) -> Json:
     response_id = new_response_id()
-    model = request_model or DEFAULT_MODEL
+    model = request_model or ""
     choice = _first_choice(chat)
     message = choice.get("message", {}) if isinstance(choice, dict) else {}
     output = chat_message_to_response_output(message)
+    # The upstream finish_reason is the only evidence a turn was cut short.
+    # Reporting every answer as "completed" made a length-truncated or
+    # content-filtered turn indistinguishable from a clean stop, so a client
+    # kept going believing the model finished.
+    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+    status = "completed" if finish_reason in (None, "stop", "tool_calls") else "incomplete"
     return {
         "id": response_id,
         "object": "response",
         "created_at": now_unix(),
-        "status": "completed",
+        "status": status,
         "model": model,
         "output": output,
         "output_text": output_text_from_items(output),
@@ -998,9 +1046,11 @@ def cache_stats_from_usage(usage: Any) -> Json:
 def normalize_usage(usage: Any, *, estimated_input_tokens: int | None = None) -> Json | None:
     """Normalize upstream usage for the client.
 
-    estimated_input_tokens substitutes the proxy's estimate for an upstream
-    input_tokens: 0 (so the client compacts correctly) and surfaces it as
-    estimatedInputTokens; the provider's own numbers are otherwise untouched.
+    The provider's own numbers are forwarded untouched. When the upstream
+    reported zero input tokens, ``estimated_input_tokens`` is surfaced as a
+    separate ``estimatedInputTokens`` hint so a client that needs a usable
+    number for compaction can read it - without the proxy overwriting the
+    real ``input_tokens`` / ``total_tokens`` fields with a byte heuristic.
     """
     if not isinstance(usage, dict):
         return None
@@ -1012,8 +1062,6 @@ def normalize_usage(usage: Any, *, estimated_input_tokens: int | None = None) ->
         "total_tokens": _as_int(usage.get("total_tokens", input_tokens + output_tokens)),
     }
     if estimated_input_tokens is not None:
-        normalized["input_tokens"] = estimated_input_tokens
-        normalized["total_tokens"] = estimated_input_tokens + output_tokens
         normalized["estimatedInputTokens"] = estimated_input_tokens
     # Surf the upstream's own prefix-cache accounting back to Codex in the
     # standard Responses shape so the app's token display shows cache hits,

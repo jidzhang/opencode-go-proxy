@@ -2,7 +2,9 @@
 
 import copy
 import json
+import os
 import unittest
+from unittest import mock
 
 from opencode_go_proxy.protocol import (
     inject_session_model,
@@ -37,6 +39,13 @@ def payload_with(*items: dict) -> dict:
 
 
 class SessionModelInjectionTests(unittest.TestCase):
+    def test_kill_switch_leaves_arguments_untouched(self) -> None:
+        # Inheritance is the default routing policy; the env var turns it off.
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_INJECT_SESSION_MODEL": "0"}):
+            payload = payload_with(thread_call(arguments="{}"))
+            result = inject_session_model(payload, SESSION_MODEL)
+        self.assertEqual(result["input"][0]["arguments"], "{}")
+
     def test_create_thread_without_model_injects_session_model(self) -> None:
         payload = payload_with(thread_call(arguments="{}"))
         result = inject_session_model(payload, SESSION_MODEL)

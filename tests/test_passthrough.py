@@ -143,7 +143,7 @@ def make_config() -> ProxyConfig:
 
 @pytest.fixture(autouse=True)
 def _allow_insecure_native_backend():
-    """All tests here talk to a local http fake backend — the escape hatch applies."""
+    """All tests here talk to a local http fake backend - the escape hatch applies."""
     with mock.patch.dict(os.environ, {passthrough.NATIVE_INSECURE_ENV: "1"}):
         yield
 

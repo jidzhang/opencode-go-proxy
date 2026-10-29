@@ -3,7 +3,7 @@ name = "opencode-go-proxy"
 version = "0.4.10"
 description = "Local single-user adapter for using OpenCode Go and Zen models with Codex"
 readme = "README.md"
-authors = [{ name = "Kartik Kabadi", email = "1kartikkabadi1@gmail.com" }]
+authors = [{ name = "Jidong Zhang" }]
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = ["zstandard>=0.22"]
@@ -19,9 +19,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/kartikkabadi/opencode-go-proxy"
-Repository = "https://github.com/kartikkabadi/opencode-go-proxy"
-Issues = "https://github.com/kartikkabadi/opencode-go-proxy/issues"
+Homepage = "https://github.com/jidzhang/opencode-go-proxy"
+Repository = "https://github.com/jidzhang/opencode-go-proxy"
+Issues = "https://github.com/jidzhang/opencode-go-proxy/issues"
 
 [project.scripts]
 opencode-go-proxy = "opencode_go_proxy.app:main"
@@ -32,3 +32,12 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+# Pinned so CI does not drift with ruff releases: the base correctness set
+# plus import sorting. Wider catalogs (S, RUF, SIM, ...) are opt-in per file.
+select = ["E4", "E7", "E9", "F", "I"]

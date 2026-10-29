@@ -2,6 +2,80 @@
 
 ## Unreleased
 
+### Removed
+
+- The vision caption engine and its "cheapest image-capable model" auto-pick.
+  Image turns now keep the requested model end to end; a model that cannot
+  accept images surfaces its own upstream error instead of being silently
+  re-routed to a substitute. The `CODEX_IMAGE_MODEL`,
+  `OPENCODE_GO_PROXY_CAPTION_MODEL`, and `OPENCODE_GO_PROXY_VISION_LOCAL_*`
+  variables no longer exist.
+- The default model. A request that omits `model` is rejected with
+  `400 model must be a non-empty string` on every surface; `/state` reports
+  the most recently used model or `null` instead of a hardcoded slug. The
+  `deepseek-v4-flash` constant was deprecated upstream and every omitted-model
+  request was silently billed against it.
+- The dead translation path: `handle_responses_request`,
+  `handle_streaming_request`, `handle_chat_stream_passthrough`,
+  `call_upstream_chat`, and `call_upstream_chat_verbatim` had no production
+  caller but carried the go-reject-to-zen re-dispatch, the two-strike picker
+  auto-hide, and a 4xx-to-502 relabelling. Also removed the proxy's writers
+  for `model-picker.json` (a user-owned file); an existing file is still
+  honoured at render time.
+- Cross-vendor reasoning-level clamping: Go models' declared
+  `supported_reasoning_levels` are forwarded verbatim instead of being
+  intersected with the native Codex effort vocabulary.
+- Catalog fabrication: unknown `context_window` / `max_context_window` stay
+  `null` instead of asserting 1,000,000, `auto_compact_token_limit` is only
+  computed when the window is known, zen entries no longer carry a synthesized
+  description, and the seed no longer ships "Fast, cheap. Best default for
+  everyday coding." style claims the repo has no pricing data to support.
+- The "(no summary available)" compaction placeholder: a summarization call
+  that returns no text now surfaces an explicit error instead of writing a
+  vacuous checkpoint the next model would resume from.
+
+### Changed
+
+- Provider usage numbers reach the client untouched. The zero-input estimate
+  is still surfaced, but only as an extra `estimatedInputTokens` field; it no
+  longer overwrites `input_tokens` / `total_tokens`.
+- An upstream `finish_reason` other than `stop`/`tool_calls` now reports
+  `status: "incomplete"` instead of every answer claiming `completed`.
+- Structured output survives translation: `text.format` maps to
+  `response_format`, and `stop`, `seed`, `presence_penalty`,
+  `frequency_penalty`, `logprobs`, `top_logprobs`, `parallel_tool_calls`, and
+  `metadata` are forwarded instead of silently dropped.
+- Assistant text between a tool call and its output is preserved in the
+  translated history (previously discarded).
+- Compaction transcripts include tool calls and their results instead of
+  flattening them away.
+- Tool-loop turns keep their thinking budget rules visible: the proxy default
+  `max_tokens` is still raised to fit a thinking budget, but an explicit
+  caller cap is never inflated, and mid-loop thinking suppression plus every
+  cap adjustment emit trace events.
+- The Gemini `"Continue."` trailing user turn stays (the Go Google gateway
+  rejects those tail shapes outright) but is now traced and can be disabled
+  with `OPENCODE_GO_PROXY_GEMINI_CONTINUE_TAIL=0`.
+- Upstream 5xx statuses are forwarded verbatim on the non-stream family path
+  instead of being relabelled 502.
+- The update check, the release anchors, the macOS menu bar source pin, and
+  the systemd unit now point at this repository instead of the upstream
+  project this fork came from. The menu bar no longer hardcodes
+  `--chat-base-url`, so `OPENCODE_GO_BASE_URL` and friends are honoured, and
+  the update confirmation shows the exact install source before restarting.
+- `opencode-go-proxy smoke-test` requires `--model <slug>` (or
+  `OPENCODE_GO_PROXY_SMOKE_MODEL`).
+- `create_thread` calls that omit a model inherit the session model. The
+  rewrite is on by default as a routing policy (the client cannot know its
+  native fallback is unavailable behind this proxy), emits a trace event every
+  time it fires, and `OPENCODE_GO_PROXY_INJECT_SESSION_MODEL=0` disables it.
+  The `codex_app` tool merge stays opt-in via
+  `OPENCODE_GO_PROXY_MERGE_CODEX_APP_TOOLS`.
+- Windows restart/install scripts only kill listeners whose process name is
+  this proxy; a foreign process holding the port is reported and left alone.
+- CI runs the suite on ubuntu and windows (Python 3.11/3.12), builds and
+  tests the macOS menu bar app, and separates lint into its own job.
+
 ### Added
 
 - Claude Code support: `POST /v1/messages` now serves every certified Go
@@ -14,10 +88,10 @@
   surface use the Anthropic error envelope; `POST /v1/messages/count_tokens`
   answers a documented byte-based estimate. Input `thinking` blocks are
   dropped (Go models cannot replay Anthropic-signed thinking) while thinking
-  output — e.g. GLM reasoning — streams as real `thinking` blocks;
+  output - e.g. GLM reasoning - streams as real `thinking` blocks;
   `stop_sequences` and `cache_control` are not forwarded.
 - Three new certified Chat Completions models verified against the live
-  gateway: `omen-alpha`, `step-5-preview`, `cat-jam-free` (35 → 38 certified
+  gateway: `omen-alpha`, `step-5-preview`, `cat-jam-free` (35 -> 38 certified
   IDs).
 - Fourth Go wire protocol: `gemini-4-argon-contributor` is served only
   through Go's Google-native endpoint
@@ -53,7 +127,7 @@
   image/reasoning fallbacks, refresh skipped) are `warn`; outright failures
   (handler crash, empty-stream exhaustion, refused start) are `error`.
   Events that earned no keep were removed outright (`credential.lookup`,
-  `catalog.refresh.tick`, `split_turn.caption_cache_hit` — outcome events
+  `catalog.refresh.tick`, `split_turn.caption_cache_hit` - outcome events
   already cover them). `OPENCODE_GO_PROXY_LOG_LEVEL` sets the minimum
   emitted level, currently defaulting to `info` for an active debugging
   period (the steady-state default is `warn`, where a healthy proxy stays
@@ -77,13 +151,13 @@
 - Chat-completions sub-calls now send the stable `x-opencode-session`
   affinity header (derived from the payload anchor when the caller supplies
   no session header, mirroring the compaction path). The Go gateway rejects
-  session-less requests with `MissingSessionID` — observed as ~400
+  session-less requests with `MissingSessionID` - observed as ~400
   rejections on 2026-10-16, three per split-turn image caption, which
   burned the caption's whole fallback budget on every captioned turn
   (`src/opencode_go_proxy/upstream.py`, `src/opencode_go_proxy/opencode_session.py`).
 - Gemini payloads whose conversation ends on anything other than a plain
-  user text turn — a model turn, a bare `functionResponse` (every post-tool
-  request from Claude Code), or a `functionResponse` merged with text — are
+  user text turn - a model turn, a bare `functionResponse` (every post-tool
+  request from Claude Code), or a `functionResponse` merged with text - are
   rejected by the Go Google gateway with an empty-body 400. The builder now
   appends a separate trailing `{"role": "user", "parts": [{"text":
   "Continue."}]}` content for those shapes only; tails that already end in
@@ -207,7 +281,7 @@
 ### Added
 
 - Menu bar update support: a Version row, an Update Available row with a
-  one-click apply (confirm → new pin saved → proxy restarts), Check for
+  one-click apply (confirm -> new pin saved -> proxy restarts), Check for
   Updates, and a UserDefaults pin override so proxy updates no longer require
   rebuilding the menu bar app.
 
@@ -251,11 +325,11 @@
 - OpenCode Zen support: the proxy now serves both OpenCode Go and OpenCode Zen.
   Zen models are auto-discovered from `https://opencode.ai/zen/v1/models` (no
   auth), merged with models.dev metadata, and appear in the catalog and
-  `/v1/models` as `zen/<id>` slugs. Requests route per family — claude/qwen to
+  `/v1/models` as `zen/<id>` slugs. Requests route per family - claude/qwen to
   Anthropic Messages (`/zen/v1/messages`, `x-api-key`), gemini to the Gemini API
   (`/zen/v1/models/<id>`, `x-goog-api-key`), gpt/grok to the Responses API
   (`/zen/v1/responses`, relayed verbatim), everything else to
-  chat/completions — with each family's stream translated back to one uniform
+  chat/completions - with each family's stream translated back to one uniform
   Responses stream. Auth uses the same key as Go
   (`OPENCODE_GO_API_KEY` / `opencode-go-api-key` keychain) with the header
   mapped per family. Zen turns meter with `provider="zen"` so they never count
@@ -489,7 +563,7 @@
   encodings return an explicit 400 instead of crashing on a magic byte.
 - Reference catalog `contrib/opencode-go-catalog.json` now ships with the `ModelsCache` wrapper
   (`fetched_at`/`etag`/`client_version`/`models`). Codex 0.142+ desktop app requires all four
-  top-level fields — the previous bare `{"models": [...]}` caused the model picker to fall back
+  top-level fields - the previous bare `{"models": [...]}` caused the model picker to fall back
   to "Custom" instead of showing the full list. The CLI tolerated the bare format, so this only
   surfaced in the desktop app.
 - SIGTERM graceful shutdown: `serve_forever` now runs on a background thread so the signal
@@ -509,16 +583,16 @@ Bug fixes + removed AUR packaging.
 
 ### Fixed
 
-- `call_upstream_chat` now catches `json.JSONDecodeError` — invalid JSON from upstream returns 502 instead of crashing
+- `call_upstream_chat` now catches `json.JSONDecodeError` - invalid JSON from upstream returns 502 instead of crashing
 - Streaming crash: if `handle_streaming_request` raised after SSE headers sent, sends `response.error` SSE event instead of corrupted HTTP response
 - Streaming + missing API key: `resolve_api_key` moved before `response.created` so error event reaches client
-- README launchd path: `~/Library/.codex/logs` → `~/.codex/logs` (matches plist)
-- LICENSE copyright year 2025 → 2026
+- README launchd path: `~/Library/.codex/logs` -> `~/.codex/logs` (matches plist)
+- LICENSE copyright year 2025 -> 2026
 
 ### Removed
 
-- AUR package (`aur/opencode-go-proxy-git/`) — not launching on AUR
-- PyPI — not launching on PyPI; `uvx --from git+...` is the install path
+- AUR package (`aur/opencode-go-proxy-git/`) - not launching on AUR
+- PyPI - not launching on PyPI; `uvx --from git+...` is the install path
 
 ## [0.1.1] - 2026-06-21
 
@@ -559,7 +633,7 @@ Initial public release.
 - No path reflection in 404 responses
 - Bind address guard warns on non-localhost
 
-[Unreleased]: https://github.com/kartikkabadi/opencode-go-proxy/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jidzhang/opencode-go-proxy/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/kartikkabadi/opencode-go-proxy/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kartikkabadi/opencode-go-proxy/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kartikkabadi/opencode-go-proxy/releases/tag/v0.3.0
