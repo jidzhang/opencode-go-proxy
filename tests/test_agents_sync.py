@@ -43,42 +43,43 @@ def _state_dir() -> str:
 
 class TestSyncAgents:
     def test_writes_one_toml_per_model(self, agents_dir) -> None:
-        _write_compact(_state_dir(), ["deepseek-v4-flash", "deepseek-v4-pro"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash", "deepseek-v4-pro"])
         report = agents_sync.sync_agents()
         assert report["catalog"] == "ok"
-        assert report["written"] == [
-            "router-opencode-go-deepseek-v4-flash.toml",
+        # One TOML per catalog model; order is not part of the contract.
+        assert set(report["written"]) == {
+            "router-opencode-go-deepseek-v4.1-flash.toml",
             "router-opencode-go-deepseek-v4-pro.toml",
-        ]
-        first = os.path.join(agents_dir, "router-opencode-go-deepseek-v4-flash.toml")
+        }
+        first = os.path.join(agents_dir, "router-opencode-go-deepseek-v4.1-flash.toml")
         with open(first, "rb") as handle:
             parsed = tomllib.load(handle)
-        assert parsed["name"] == "router_opencode_go_deepseek-v4-flash"
+        assert parsed["name"] == "router_opencode_go_deepseek-v4.1-flash"
         assert parsed["model_provider"] == "opencode-go"
-        assert parsed["model"] == "opencode-go/deepseek-v4-flash"
+        assert parsed["model"] == "opencode-go/deepseek-v4.1-flash"
         with open(first, encoding="utf-8") as handle:
             text = handle.read()
         assert agents_sync.OWNERSHIP_MARKER in text
 
     def test_second_sync_is_idempotent(self, agents_dir) -> None:
-        _write_compact(_state_dir(), ["deepseek-v4-flash"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash"])
         agents_sync.sync_agents()
         report = agents_sync.sync_agents()
         assert report["written"] == []
-        assert report["unchanged"] == ["router-opencode-go-deepseek-v4-flash.toml"]
+        assert report["unchanged"] == ["router-opencode-go-deepseek-v4.1-flash.toml"]
         assert report["removed"] == []
 
     def test_removes_stale_owned(self, agents_dir) -> None:
-        _write_compact(_state_dir(), ["deepseek-v4-flash", "deepseek-v4-pro"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash", "deepseek-v4-pro"])
         agents_sync.sync_agents()
-        _write_compact(_state_dir(), ["deepseek-v4-flash"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash"])
         report = agents_sync.sync_agents()
         assert report["removed"] == ["router-opencode-go-deepseek-v4-pro.toml"]
         assert not os.path.exists(os.path.join(agents_dir, "router-opencode-go-deepseek-v4-pro.toml"))
-        assert os.path.exists(os.path.join(agents_dir, "router-opencode-go-deepseek-v4-flash.toml"))
+        assert os.path.exists(os.path.join(agents_dir, "router-opencode-go-deepseek-v4.1-flash.toml"))
 
     def test_leaves_foreign_files_alone(self, agents_dir) -> None:
-        _write_compact(_state_dir(), ["deepseek-v4-flash"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash"])
         foreign = os.path.join(agents_dir, "router-model-opencode-go-glm-5-1.toml")
         os.makedirs(agents_dir, exist_ok=True)
         with open(foreign, "w", encoding="utf-8") as handle:
@@ -87,13 +88,13 @@ class TestSyncAgents:
         assert os.path.basename(foreign) in os.listdir(agents_dir)
         assert report["removed"] == []
     def test_collision_file_is_reported_not_overwritten(self, agents_dir) -> None:
-        _write_compact(_state_dir(), ["deepseek-v4-flash"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash"])
         os.makedirs(agents_dir, exist_ok=True)
-        target = os.path.join(agents_dir, "router-opencode-go-deepseek-v4-flash.toml")
+        target = os.path.join(agents_dir, "router-opencode-go-deepseek-v4.1-flash.toml")
         with open(target, "w", encoding="utf-8") as handle:
             handle.write('# user-owned agent, hands off\nname = "mine"\n')
         report = agents_sync.sync_agents()
-        assert report["collisions"] == ["router-opencode-go-deepseek-v4-flash.toml"]
+        assert report["collisions"] == ["router-opencode-go-deepseek-v4.1-flash.toml"]
         assert report["written"] == []
         with open(target, encoding="utf-8") as handle:
             assert handle.read() == '# user-owned agent, hands off\nname = "mine"\n'
@@ -112,14 +113,14 @@ class TestSyncAgents:
 
 class TestCli:
     def test_agents_sync_cmd(self, agents_dir, capsys) -> None:
-        _write_compact(_state_dir(), ["deepseek-v4-flash"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash"])
         assert agents_sync.agents_sync_cmd([]) == 0
         out = capsys.readouterr().out
         assert "1 written" in out
-        assert "router-opencode-go-deepseek-v4-flash.toml" in out
+        assert "router-opencode-go-deepseek-v4.1-flash.toml" in out
 
     def test_agents_sync_cmd_json(self, agents_dir, capsys) -> None:
-        _write_compact(_state_dir(), ["deepseek-v4-flash"])
+        _write_compact(_state_dir(), ["deepseek-v4.1-flash"])
         assert agents_sync.agents_sync_cmd(["--json"]) == 0
         data = json.loads(capsys.readouterr().out)
-        assert data["written"] == ["router-opencode-go-deepseek-v4-flash.toml"]
+        assert data["written"] == ["router-opencode-go-deepseek-v4.1-flash.toml"]

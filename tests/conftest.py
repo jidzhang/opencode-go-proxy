@@ -29,7 +29,7 @@ def isolated_state_dir(tmp_path) -> None:
                 "client_version": "0.147.0",
                 "models": [
                     {
-                        "slug": "deepseek-v4-flash",
+                        "slug": "deepseek-v4.1-flash",
                         "display_name": "DeepSeek V4 Flash",
                         "description": "Test fixture.",
                         "input_modalities": ["text", "image"],

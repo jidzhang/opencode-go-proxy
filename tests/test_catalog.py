@@ -48,7 +48,7 @@ class DiscoverModelsTests(unittest.TestCase):
         payload = {
             "data": [
                 {"id": "grok-4.6", "name": "Grok 4.6"},
-                {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash"},
+                {"id": "deepseek-v4.1-flash", "name": "DeepSeek V4 Flash"},
                 {"id": "some-model", "name": "Some Model"},
             ]
         }
@@ -72,7 +72,7 @@ class DiscoverModelsTests(unittest.TestCase):
 
         self.assertEqual(
             [m["id"] for m in models],
-            ["grok-4.6", "deepseek-v4-flash"],
+            ["grok-4.6", "deepseek-v4.1-flash"],
         )
         self.assertNotIn("some-model", {m["id"] for m in models})
         self.assertEqual(seen["url"], "https://opencode.ai/zen/go/v1/models")
@@ -109,10 +109,10 @@ class DiscoverModelsTests(unittest.TestCase):
 class MergeModelsTests(unittest.TestCase):
     def test_existing_plus_new_returns_new_only(self) -> None:
         discovered = [
-            {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash"},
+            {"id": "deepseek-v4.1-flash", "name": "DeepSeek V4 Flash"},
             {"id": "new-model", "name": "New Model"},
         ]
-        new_models, removed = merge_models({"deepseek-v4-flash"}, discovered)
+        new_models, removed = merge_models({"deepseek-v4.1-flash"}, discovered)
 
         self.assertEqual([m["id"] for m in new_models], ["new-model"])
         self.assertEqual(removed, [])
@@ -190,12 +190,12 @@ class LoadKnownSlugsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             catalog_path = Path(tmp) / "catalog.json"
             catalog_path.write_text(
-                json.dumps({"models": [{"slug": "deepseek-v4-flash"}, {"slug": "deepseek-v4-pro"}]})
+                json.dumps({"models": [{"slug": "deepseek-v4.1-flash"}, {"slug": "deepseek-v4-pro"}]})
             )
 
             slugs = load_known_slugs(catalog_path=str(catalog_path))
 
-        self.assertEqual(slugs, {"deepseek-v4-flash", "deepseek-v4-pro"})
+        self.assertEqual(slugs, {"deepseek-v4.1-flash", "deepseek-v4-pro"})
 
     def test_load_known_slugs_returns_empty_set_when_file_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

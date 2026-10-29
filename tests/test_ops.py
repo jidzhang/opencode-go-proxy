@@ -95,7 +95,7 @@ class TestMeter:
         state = tmp_path / "state"
         state.mkdir(exist_ok=True)
         p = state / "usage-events.jsonl"
-        p.write_text('{"model":"deepseek-v4-flash","status":0}\n')
+        p.write_text('{"model":"deepseek-v4.1-flash","status":0}\n')
         before = p.read_text()
         with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_STATE_DIR": str(state)}):
             c = ops.check_meter()
@@ -219,7 +219,7 @@ class TestSmoke:
 
     def test_ok(self) -> None:
         body = json.dumps({
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4.1-flash",
             "output_text": f"Sure: {ops.SMOKE_MARKER}",
             "output": [{"content": [{"text": ops.SMOKE_MARKER}]}],
         }).encode()
@@ -268,7 +268,7 @@ class TestMask:
         assert ops._mask_secret_values("api_key = 'sk-single'") == "api_key= ***redacted***"
         assert ops._mask_secret_values('OPENCODE_API_KEY = "sk-upper"') == "OPENCODE_API_KEY= ***redacted***"
         assert ops._mask_secret_values('env = { OPENCODE_API_KEY = "sk-inline" }') == "env = { OPENCODE_API_KEY= ***redacted*** }"
-        assert ops._mask_secret_values('model = "deepseek-v4-flash"') == 'model = "deepseek-v4-flash"'
+        assert ops._mask_secret_values('model = "deepseek-v4.1-flash"') == 'model = "deepseek-v4.1-flash"'
 
     def test_redacts_log_text(self) -> None:
         out = ops._redact_text("authorization: Bearer sk-live-secret-12345 reply sk-abcdefghijkl")
@@ -302,7 +302,7 @@ class TestSupportBundle:
         state = tmp_path / "state"
         state.mkdir(exist_ok=True)
         (state / "usage-events.jsonl").write_text(
-            '{"at":"2026-08-10T00:00:00Z","model":"deepseek-v4-flash","status":200}\n'
+            '{"at":"2026-08-10T00:00:00Z","model":"deepseek-v4.1-flash","status":200}\n'
         )
         out = tmp_path / "bundle.json"
         with mock.patch.object(ops, "LOG_DIR", str(log_dir)), \
@@ -321,7 +321,7 @@ class TestSupportBundle:
         assert "***redacted***" in data["config"]["redacted"]
         assert data["config"]["exists"] is True
         assert data["meter"]["path"].endswith("usage-events.jsonl")
-        assert data["meter"]["tail"][0]["model"] == "deepseek-v4-flash"
+        assert data["meter"]["tail"][0]["model"] == "deepseek-v4.1-flash"
         assert data["logs"]["tail"]["opencode-go-proxy.err"]
         assert data["catalog"]["modelCount"] >= 2
         assert data["doctor"]["checks"]

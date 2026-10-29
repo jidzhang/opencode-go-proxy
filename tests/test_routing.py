@@ -66,7 +66,7 @@ class RouteTargetTests(unittest.TestCase):
 
     def test_prefixed_opencode_go_slug_routes_opencode_go(self) -> None:
         _write_native_capture(["gpt-5.6-luna"])
-        self.assertEqual(route_target("opencode-go/deepseek-v4-flash"), "opencode_go")
+        self.assertEqual(route_target("opencode-go/deepseek-v4.1-flash"), "opencode_go")
 
     def test_unknown_slug_routes_opencode_go(self) -> None:
         _write_native_capture(["gpt-5.6-luna"])
@@ -74,19 +74,19 @@ class RouteTargetTests(unittest.TestCase):
 
     def test_missing_capture_routes_everything_opencode_go(self) -> None:
         self.assertEqual(route_target("gpt-5.6-luna"), "opencode_go")
-        self.assertEqual(route_target("opencode-go/deepseek-v4-flash"), "opencode_go")
+        self.assertEqual(route_target("opencode-go/deepseek-v4.1-flash"), "opencode_go")
 
     def test_explicit_native_slugs_override_file(self) -> None:
         self.assertEqual(route_target("x-model", native_slugs={"x-model"}), "native")
         self.assertEqual(route_target("y-model", native_slugs={"x-model"}), "opencode_go")
 
     def test_prefixed_native_entry_never_hijacks_bare_app_slug(self) -> None:
-        # The native capture lists opencode-go/deepseek-v4-flash; the app's
+        # The native capture lists opencode-go/deepseek-v4.1-flash; the app's
         # own references to that model must still route to opencode_go after
         # the prefix is stripped.
-        _write_native_capture(["gpt-5.6-luna", "opencode-go/deepseek-v4-flash"])
-        self.assertEqual(route_target("opencode-go/deepseek-v4-flash"), "opencode_go")
-        self.assertEqual(route_target("deepseek-v4-flash"), "opencode_go")
+        _write_native_capture(["gpt-5.6-luna", "opencode-go/deepseek-v4.1-flash"])
+        self.assertEqual(route_target("opencode-go/deepseek-v4.1-flash"), "opencode_go")
+        self.assertEqual(route_target("deepseek-v4.1-flash"), "opencode_go")
 
     def test_prefixed_slug_wins_over_bare_native_collision(self) -> None:
         # A user-selected opencode-go/<slug> whose bare slug is a native model
@@ -109,8 +109,8 @@ class RouteTargetTests(unittest.TestCase):
 
 class KnownModelTests(unittest.TestCase):
     def test_known_go_model(self) -> None:
-        self.assertTrue(is_known_model_slug("deepseek-v4-flash"))
-        self.assertTrue(is_known_model_slug("opencode-go/deepseek-v4-flash"))
+        self.assertTrue(is_known_model_slug("deepseek-v4.1-flash"))
+        self.assertTrue(is_known_model_slug("opencode-go/deepseek-v4.1-flash"))
 
     def test_unknown_model(self) -> None:
         self.assertFalse(is_known_model_slug("no-such-model"))
@@ -142,11 +142,11 @@ class ZenRouteTargetTests(unittest.TestCase):
         self.assertEqual(route_target("north-mini-code-free"), "zen")
 
     def test_bare_collision_id_stays_opencode_go(self) -> None:
-        # deepseek-v4-flash exists on both zen and the opencode-go catalog:
+        # deepseek-v4.1-flash exists on both zen and the opencode-go catalog:
         # go wins for bare slugs; the zen/ prefix opts a collision into zen.
         _write_native_capture(["gpt-5.6-luna"])
-        _seed_zen_ids(["deepseek-v4-flash", "north-mini-code-free"])
-        self.assertEqual(route_target("deepseek-v4-flash"), "opencode_go")
+        _seed_zen_ids(["deepseek-v4.1-flash", "north-mini-code-free"])
+        self.assertEqual(route_target("deepseek-v4.1-flash"), "opencode_go")
         self.assertEqual(route_target("north-mini-code-free"), "zen")
 
     def test_bare_zen_only_id_that_is_native_stays_native(self) -> None:
@@ -214,12 +214,12 @@ class NormalizeZenSlugTests(unittest.TestCase):
         self.assertEqual(normalize_model_slug("zen/claude-sonnet-4-5"), "claude-sonnet-4-5")
 
     def test_opencode_go_prefix_still_stripped(self) -> None:
-        self.assertEqual(normalize_model_slug("opencode-go/deepseek-v4-flash"), "deepseek-v4-flash")
+        self.assertEqual(normalize_model_slug("opencode-go/deepseek-v4.1-flash"), "deepseek-v4.1-flash")
 
     def test_prefixes_do_not_cross_contaminate(self) -> None:
         self.assertEqual(normalize_model_slug("opencode-go-zen/qwen3"), "opencode-go-zen/qwen3")
         self.assertEqual(normalize_model_slug("zen-opencode-go/gpt-5.5"), "zen-opencode-go/gpt-5.5")
-        self.assertEqual(normalize_model_slug("zen/deepseek-v4-flash"), "deepseek-v4-flash")
+        self.assertEqual(normalize_model_slug("zen/deepseek-v4.1-flash"), "deepseek-v4.1-flash")
 
 
 if __name__ == "__main__":

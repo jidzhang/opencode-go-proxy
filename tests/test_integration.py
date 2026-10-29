@@ -25,7 +25,7 @@ def make_config(port: int) -> ProxyConfig:
     )
 
 
-def mock_chat_response(content: str = "hello", model: str = "deepseek-v4-flash") -> dict:
+def mock_chat_response(content: str = "hello", model: str = "deepseek-v4.1-flash") -> dict:
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
@@ -160,7 +160,7 @@ class TestResponsesRoundTrip:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(json.dumps(mock_resp).encode())):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "Say hi."}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "Say hi."}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -180,7 +180,7 @@ class TestResponsesRoundTrip:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(json.dumps(mock_resp).encode())):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -196,7 +196,7 @@ class TestResponsesRoundTrip:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(json.dumps(mock_resp).encode())):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/responses/compact",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -216,7 +216,7 @@ class TestResponsesRoundTrip:
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch("opencode_go_proxy.secrets.subprocess.run", return_value=failed_completed):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -250,9 +250,9 @@ class TestStreamingResponse:
 
         # Build a mock SSE stream from upstream
         sse_lines = [
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"hel"}}]}\n',
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"lo"}}]}\n',
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"hel"}}]}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"content":"lo"}}]}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n',
             b'data: [DONE]\n',
         ]
         mock_body = b"".join(sse_lines)
@@ -260,7 +260,7 @@ class TestStreamingResponse:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(mock_body)):
             conn = HTTPConnection("127.0.0.1", port, timeout=10)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "Say hi.", "stream": True}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "Say hi.", "stream": True}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             raw = resp.read()
@@ -286,7 +286,7 @@ class TestStreamingResponse:
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch("opencode_go_proxy.secrets.subprocess.run", return_value=failed_completed):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi", "stream": True}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi", "stream": True}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             raw = resp.read()
@@ -304,7 +304,7 @@ class TestStreamingResponse:
         ):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi", "stream": True}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi", "stream": True}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             raw = resp.read()
@@ -347,7 +347,7 @@ class TestEdgeCases:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", side_effect=err):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -363,7 +363,7 @@ class TestEdgeCases:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", side_effect=err):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -382,7 +382,7 @@ class TestEdgeCases:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", side_effect=err):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -398,7 +398,7 @@ class TestEdgeCases:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(json.dumps(mock_resp).encode())):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": ""}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": ""}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -412,7 +412,7 @@ class TestEdgeCases:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(b"not json")):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -536,7 +536,7 @@ class TestToolCallRoundTrip:
         mock_resp = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4.1-flash",
             "choices": [{
                 "index": 0,
                 "message": {
@@ -557,7 +557,7 @@ class TestToolCallRoundTrip:
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
                          json.dumps({
-                             "model": "deepseek-v4-flash",
+                             "model": "deepseek-v4.1-flash",
                              "input": "What's the weather in SF?",
                              "tools": [{"type": "function", "function": {
                                  "name": "get_weather",
@@ -581,9 +581,9 @@ class TestStreamingToolCalls:
     def test_streaming_tool_call_sse(self, server):
         port, _ = server
         sse_lines = [
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":""}}]}}]}\n',
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\":\\"README.md\\"}"}}]}}]}\n',
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":""}}]}}]}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"path\\":\\"README.md\\"}"}}]}}]}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n',
             b'data: [DONE]\n',
         ]
         mock_body = b"".join(sse_lines)
@@ -591,7 +591,7 @@ class TestStreamingToolCalls:
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch("urllib.request.urlopen", return_value=MockUpstreamResponse(mock_body)):
             conn = HTTPConnection("127.0.0.1", port, timeout=10)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "read README", "stream": True}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "read README", "stream": True}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             raw = resp.read()
@@ -628,7 +628,7 @@ class TestCacheAccounting:
         cached_resp = {
             "id": "chatcmpl-cache",
             "object": "chat.completion",
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4.1-flash",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
             "usage": {
                 "prompt_tokens": 1000,
@@ -644,7 +644,7 @@ class TestCacheAccounting:
         ):
             conn = HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi"}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi"}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             body = json.loads(resp.read())
@@ -665,8 +665,8 @@ class TestCacheAccounting:
     def test_streaming_sets_include_usage_and_reports_cache(self, server):
         port, _ = server
         sse_lines = [
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"hi"}}]}\n',
-            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":200,"completion_tokens":3,"total_tokens":203,"prompt_cache_hit_tokens":198,"prompt_cache_miss_tokens":2}}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"content":"hi"}}]}\n',
+            b'data: {"id":"1","object":"chat.completion.chunk","model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":200,"completion_tokens":3,"total_tokens":203,"prompt_cache_hit_tokens":198,"prompt_cache_miss_tokens":2}}\n',
             b'data: [DONE]\n',
         ]
         mock_body = b"".join(sse_lines)
@@ -676,7 +676,7 @@ class TestCacheAccounting:
         ) as mock_urlopen:
             conn = HTTPConnection("127.0.0.1", port, timeout=10)
             conn.request("POST", "/v1/responses",
-                         json.dumps({"model": "deepseek-v4-flash", "input": "hi", "stream": True}),
+                         json.dumps({"model": "deepseek-v4.1-flash", "input": "hi", "stream": True}),
                          {"content-type": "application/json"})
             resp = conn.getresponse()
             raw = resp.read()
@@ -711,7 +711,7 @@ class TestZstdRequests:
         port, _ = server
         mock_resp = mock_chat_response("hello from compressed")
 
-        payload = json.dumps({"model": "deepseek-v4-flash", "input": "Say hi."}).encode()
+        payload = json.dumps({"model": "deepseek-v4.1-flash", "input": "Say hi."}).encode()
         compressed = zstandard.ZstdCompressor().compress(payload)
 
         with mock.patch.dict(os.environ, {"OPENCODE_GO_API_KEY": "test-key"}), mock.patch(

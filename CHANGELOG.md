@@ -13,7 +13,7 @@
 - The default model. A request that omits `model` is rejected with
   `400 model must be a non-empty string` on every surface; `/state` reports
   the most recently used model or `null` instead of a hardcoded slug. The
-  `deepseek-v4-flash` constant was deprecated upstream and every omitted-model
+  `deepseek-v4.1-flash` constant was deprecated upstream and every omitted-model
   request was silently billed against it.
 - The dead translation path: `handle_responses_request`,
   `handle_streaming_request`, `handle_chat_stream_passthrough`,
@@ -224,7 +224,7 @@
   attempts 1-2 stay buffered and are discarded when empty, attempt 3 relays
   live so the client always sees a terminal outcome.
 - Reject unknown or malformed model IDs before routing instead of silently
-  substituting `deepseek-v4-flash`.
+  substituting `deepseek-v4.1-flash`.
 - Avoid reverse-DNS lookup delays while starting the local listener.
 - Clarify the project's independent, single-user credential and policy boundary.
 

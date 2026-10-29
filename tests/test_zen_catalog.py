@@ -22,7 +22,7 @@ ZEN_PAYLOAD = {
         {"id": "gemini-3-pro", "object": "model", "created": 1, "owned_by": "zen"},
         {"id": "gpt-5.5", "object": "model", "created": 1, "owned_by": "zen"},
         {"id": "grok-4.5", "object": "model", "created": 1, "owned_by": "zen"},
-        {"id": "deepseek-v4-flash", "object": "model", "created": 1, "owned_by": "zen"},
+        {"id": "deepseek-v4.1-flash", "object": "model", "created": 1, "owned_by": "zen"},
         {"id": "qwen3-coder", "object": "model", "created": 1, "owned_by": "zen"},
     ],
 }
@@ -36,7 +36,7 @@ MODELS_DEV_PAYLOAD = {
             "gemini-3-pro": {"family": "gemini-pro"},
             "gpt-5.5": {"family": "gpt"},
             "grok-4.5": {"family": "grok"},
-            "deepseek-v4-flash": {"family": "deepseek-flash"},
+            "deepseek-v4.1-flash": {"family": "deepseek-flash"},
             "qwen3-coder": {"family": "qwen"},
         }
     }
@@ -106,11 +106,11 @@ class ResolveFamilyTests(unittest.TestCase):
             "gemini-3-pro": "google_gemini",
             "gpt-5.5": "openai_responses",
             "grok-4.5": "openai_responses",
-            "deepseek-v4-flash": "openai_chat",
+            "deepseek-v4.1-flash": "openai_chat",
             "glm-4.6": "openai_chat",
             "minimax-m3": "openai_chat",
             "kimi-k2": "openai_chat",
-            "deepseek-v4-flash-free": "openai_chat",
+            "deepseek-v4.1-flash-free": "openai_chat",
             "big-pickle": "openai_chat",
         }
         for model_id, expected in cases.items():
@@ -118,10 +118,10 @@ class ResolveFamilyTests(unittest.TestCase):
                 self.assertEqual(zen_catalog.resolve_family(model_id), expected)
 
     def test_generic_models_dev_family_overrides_prefix(self) -> None:
-        # models.dev classifies deepseek-v4-flash as anthropic here; the
+        # models.dev classifies deepseek-v4.1-flash as anthropic here; the
         # metadata wins over the prefix fallback.
-        families = {"deepseek-v4-flash": "anthropic"}
-        self.assertEqual(zen_catalog.resolve_family("deepseek-v4-flash", families), "anthropic_messages")
+        families = {"deepseek-v4.1-flash": "anthropic"}
+        self.assertEqual(zen_catalog.resolve_family("deepseek-v4.1-flash", families), "anthropic_messages")
 
     def test_specific_models_dev_families_classify_by_prefix(self) -> None:
         families = {
@@ -163,14 +163,14 @@ class CaptureZenModelsTests(unittest.TestCase):
         self.assertEqual(len(result["models"]), 6)
         self.assertEqual(
             zen_catalog.zen_model_ids(),
-            {"claude-sonnet-4-5", "gemini-3-pro", "gpt-5.5", "grok-4.5", "deepseek-v4-flash", "qwen3-coder"},
+            {"claude-sonnet-4-5", "gemini-3-pro", "gpt-5.5", "grok-4.5", "deepseek-v4.1-flash", "qwen3-coder"},
         )
         families = zen_catalog.zen_families()
         self.assertEqual(families["claude-sonnet-4-5"], "anthropic_messages")
         self.assertEqual(families["gemini-3-pro"], "google_gemini")
         self.assertEqual(families["gpt-5.5"], "openai_responses")
         self.assertEqual(families["grok-4.5"], "openai_responses")
-        self.assertEqual(families["deepseek-v4-flash"], "openai_chat")
+        self.assertEqual(families["deepseek-v4.1-flash"], "openai_chat")
         self.assertEqual(families["qwen3-coder"], "anthropic_messages")
         self.assertTrue(os.path.exists(zen_catalog.zen_models_path()))
         self.assertTrue(os.path.exists(zen_catalog.zen_catalog_path()))
@@ -293,7 +293,7 @@ class ZenMergedCatalogTests(unittest.TestCase):
         self.assertEqual(len(zen_entries), 6)
         slugs = {str(m["slug"]) for m in merged["models"]}
         self.assertIn("zen/claude-sonnet-4-5", slugs)
-        self.assertIn("opencode-go/deepseek-v4-flash", slugs)
+        self.assertIn("opencode-go/deepseek-v4.1-flash", slugs)
 
         record = next(m for m in zen_entries if m["slug"] == "zen/claude-sonnet-4-5")
         self.assertEqual(record["family"], "anthropic_messages")
@@ -309,8 +309,8 @@ class ZenMergedCatalogTests(unittest.TestCase):
         _seed_zen_cache(ZEN_PAYLOAD["data"])
         merged = catalog.render_merged_catalog()
 
-        record = next(m for m in merged["models"] if m["slug"] == "zen/deepseek-v4-flash")
-        self.assertEqual(record["display_name"], "deepseek-v4-flash (Zen)")
+        record = next(m for m in merged["models"] if m["slug"] == "zen/deepseek-v4.1-flash")
+        self.assertEqual(record["display_name"], "deepseek-v4.1-flash (Zen)")
 
     def test_zen_only_record_keeps_plain_display_name(self) -> None:
         # claude-sonnet-4-5 has no opencode-go counterpart in the seed
@@ -332,7 +332,7 @@ class ZenMergedCatalogTests(unittest.TestCase):
             zen_slugs,
             {
                 "zen/claude-sonnet-4-5",
-                "zen/deepseek-v4-flash",
+                "zen/deepseek-v4.1-flash",
                 "zen/gemini-3-pro",
                 "zen/gpt-5.5",
                 "zen/grok-4.5",

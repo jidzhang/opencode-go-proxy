@@ -38,7 +38,7 @@ def no_quota_write_interval(monkeypatch) -> None:
 
 
 def chat_payload() -> dict:
-    return {"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}]}
+    return {"model": "deepseek-v4.1-flash", "messages": [{"role": "user", "content": "hi"}]}
 
 
 def _reset_epoch(snapshot: dict) -> float:

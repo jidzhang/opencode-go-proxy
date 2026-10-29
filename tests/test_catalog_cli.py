@@ -19,7 +19,7 @@ class CatalogCliTest(unittest.TestCase):
             "shared_instructions": "You are Codex.",
             "models": [
                 {
-                    "slug": "deepseek-v4-flash",
+                    "slug": "deepseek-v4.1-flash",
                     "display_name": "DeepSeek V4 Flash",
                     "description": "d",
                     "default_reasoning_level": "medium",
@@ -50,7 +50,7 @@ class CatalogCliTest(unittest.TestCase):
             "shared_instructions": "You are Codex.",
             "models": [
                 {
-                    "slug": "deepseek-v4-flash",
+                    "slug": "deepseek-v4.1-flash",
                     "display_name": "DeepSeek V4 Flash",
                     "description": "d",
                     "default_reasoning_level": "medium",
@@ -64,7 +64,7 @@ class CatalogCliTest(unittest.TestCase):
         old = os.environ.get("CODEX_MODEL_CATALOG")
         try:
             os.environ["CODEX_MODEL_CATALOG"] = tmp_cat
-            self.assertIn("deepseek-v4-flash", protocol.reload_known_models())
+            self.assertIn("deepseek-v4.1-flash", protocol.reload_known_models())
         finally:
             if old is None:
                 os.environ.pop("CODEX_MODEL_CATALOG", None)

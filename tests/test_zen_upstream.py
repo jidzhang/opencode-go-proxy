@@ -32,7 +32,7 @@ FIXTURE_FAMILIES = {
     "gemini-3-pro": "google_gemini",
     "gpt-5.6": "openai_responses",
     "grok-4": "openai_responses",
-    "deepseek-v4-flash": "openai_chat",
+    "deepseek-v4.1-flash": "openai_chat",
     "glm-5": "openai_chat",
 }
 
@@ -108,7 +108,7 @@ def http_error(code: int, body: bytes = b'{"type":"error","error":{"type":"AuthE
     return urllib.error.HTTPError("https://opencode.ai/zen/v1/chat/completions", code, "err", headers, io.BytesIO(body))
 
 
-def zen_payload(model: str = "zen/deepseek-v4-flash", **overrides) -> dict:
+def zen_payload(model: str = "zen/deepseek-v4.1-flash", **overrides) -> dict:
     payload = {
         "model": model,
         "instructions": "You are helpful.",
@@ -181,7 +181,7 @@ class TestFamilyDispatch:
             ("zen/gemini-3-pro", ":streamGenerateContent?alt=sse", "x-goog-api-key"),
             ("zen/gpt-5.6", "/responses", "authorization"),
             ("zen/grok-4", "/responses", "authorization"),
-            ("zen/deepseek-v4-flash", "/chat/completions", "authorization"),
+            ("zen/deepseek-v4.1-flash", "/chat/completions", "authorization"),
             ("zen/glm-5", "/chat/completions", "authorization"),
         ],
     )
@@ -206,10 +206,10 @@ class TestFamilyDispatch:
     def test_zen_prefix_stripped_from_upstream_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _fake_key(monkeypatch)
         url, body, _headers = zen_upstream._build_zen_request(
-            zen_payload(), "openai_chat", "deepseek-v4-flash", "test-key-zen",
-            stream=True, session_model="zen/deepseek-v4-flash",
+            zen_payload(), "openai_chat", "deepseek-v4.1-flash", "test-key-zen",
+            stream=True, session_model="zen/deepseek-v4.1-flash",
         )
-        assert body["model"] == "deepseek-v4-flash"
+        assert body["model"] == "deepseek-v4.1-flash"
         assert url.endswith("/chat/completions")
 
     def test_unknown_id_defaults_to_chat(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -218,8 +218,8 @@ class TestFamilyDispatch:
         assert family == "openai_chat"
 
     def test_bare_slug_is_not_stripped(self) -> None:
-        assert zen_upstream.bare_zen_id("deepseek-v4-flash") == "deepseek-v4-flash"
-        assert zen_upstream.bare_zen_id("zen/deepseek-v4-flash") == "deepseek-v4-flash"
+        assert zen_upstream.bare_zen_id("deepseek-v4.1-flash") == "deepseek-v4.1-flash"
+        assert zen_upstream.bare_zen_id("zen/deepseek-v4.1-flash") == "deepseek-v4.1-flash"
 
 
 class TestChatFamily:
@@ -241,14 +241,14 @@ class TestChatFamily:
         assert len(captured) == 1
         sent = _request_body(captured[0])
         # Responses input translated to chat messages with the bare model.
-        assert sent["model"] == "deepseek-v4-flash"
+        assert sent["model"] == "deepseek-v4.1-flash"
         assert sent["messages"][0] == {"role": "system", "content": "You are helpful."}
         assert sent["messages"][1] == {"role": "user", "content": "hello"}
         assert sent["stream"] is False
         assert "stream_options" not in sent
         # Translated back to a responses object.
         assert response["output_text"] == "hi"
-        assert response["model"] == "zen/deepseek-v4-flash"
+        assert response["model"] == "zen/deepseek-v4.1-flash"
         assert response["usage"]["input_tokens"] == 3
         assert response["usage"]["output_tokens"] == 1
 
@@ -275,7 +275,7 @@ class TestChatFamily:
         assert sent["stream_options"] == {"include_usage": True}
         events = handler.events()
         assert events[0]["type"] == "response.created"
-        assert events[0]["response"]["model"] == "zen/deepseek-v4-flash"
+        assert events[0]["response"]["model"] == "zen/deepseek-v4.1-flash"
         completed = next(e for e in events if e["type"] == "response.completed")
         assert completed["response"]["output_text"] == "hi"
         assert completed["response"]["usage"]["input_tokens"] == 1
@@ -1098,14 +1098,14 @@ class TestZenChatSurface:
              mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
             zen_upstream.handle_zen_chat_request(
                 handler,
-                {"model": "zen/deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                {"model": "zen/deepseek-v4.1-flash", "messages": [{"role": "user", "content": "hi"}], "stream": True},
                 make_config(), "req",
             )
 
         assert handler.status == 200
         assert captured[0].full_url.endswith("/chat/completions")
         assert captured[0].full_url.startswith("https://opencode.ai/zen/v1")
-        assert _request_body(captured[0])["model"] == "deepseek-v4-flash"
+        assert _request_body(captured[0])["model"] == "deepseek-v4.1-flash"
         assert handler.body() == b"".join(lines)
         records = _meter_records()
         assert records and records[0]["provider"] == "zen"
@@ -1119,7 +1119,7 @@ class TestZenChatSurface:
         )):
             zen_upstream.handle_zen_chat_request(
                 handler,
-                {"model": "zen/deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}]},
+                {"model": "zen/deepseek-v4.1-flash", "messages": [{"role": "user", "content": "hi"}]},
                 make_config(), "req",
             )
         assert handler.status == 200
@@ -1166,7 +1166,7 @@ class TestAppDispatch:
             json.dumps(
                 {
                     "fetched_at": "2026-08-14T00:00:00Z",
-                    "models": [{"id": "deepseek-v4-flash"}],
+                    "models": [{"id": "deepseek-v4.1-flash"}],
                 }
             )
         )
@@ -1198,7 +1198,7 @@ class TestAppDispatch:
 
                 conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
                 payload = json.dumps({
-                    "model": "zen/deepseek-v4-flash",
+                    "model": "zen/deepseek-v4.1-flash",
                     "input": "hello",
                     "stream": True,
                 })
@@ -1220,7 +1220,7 @@ class TestAppDispatch:
             assert not go_records, "opencode-go upstream must never see a zen request"
             assert zen_records[0]["path"] == "/zen/v1/chat/completions"
             sent = json.loads(zen_records[0]["body"])
-            assert sent["model"] == "deepseek-v4-flash"
+            assert sent["model"] == "deepseek-v4.1-flash"
 
             records = []
             try:

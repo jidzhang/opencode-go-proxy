@@ -23,7 +23,7 @@ from opencode_go_proxy.config import ProxyConfig
 def base_models() -> list[dict]:
     return [
         {
-            "slug": "deepseek-v4-flash",
+            "slug": "deepseek-v4.1-flash",
             "display_name": "DeepSeek V4 Flash",
             "description": "Fast and cheap.",
             "default_reasoning_level": "medium",
@@ -31,7 +31,7 @@ def base_models() -> list[dict]:
             "context_window": 1000000,
             "max_context_window": 1000000,
             "multi_agent_version": "v1",
-            "comp_hash": "opencode-go-deepseek-v4-flash-v1",
+            "comp_hash": "opencode-go-deepseek-v4.1-flash-v1",
         },
         {
             "slug": "deepseek-v4-pro",
@@ -78,13 +78,13 @@ class TestApplyUserModels:
     def test_edits_display_fields_on_existing_model(self) -> None:
         models = catalog.apply_user_models(
             base_models(),
-            [{"slug": "deepseek-v4-flash", "display_name": "Flash (edited)", "priority": 3}],
+            [{"slug": "deepseek-v4.1-flash", "display_name": "Flash (edited)", "priority": 3}],
         )
 
         flash = models[0]
         assert flash["display_name"] == "Flash (edited)"
         assert flash["priority"] == 3
-        assert flash["slug"] == "deepseek-v4-flash"
+        assert flash["slug"] == "deepseek-v4.1-flash"
 
     def test_hide_flag_sets_visibility(self) -> None:
         models = catalog.apply_user_models(
@@ -117,7 +117,7 @@ class TestApplyUserModels:
 
         catalog.apply_user_models(
             base_models(),
-            [{"slug": "deepseek-v4-flash", "display_name": "Renamed"}],
+            [{"slug": "deepseek-v4.1-flash", "display_name": "Renamed"}],
         )
 
         assert json.dumps(base_models(), sort_keys=True) == before
@@ -125,7 +125,7 @@ class TestApplyUserModels:
 
 class TestHiddenModels:
     def test_apply_hidden_models_hides_slugs(self) -> None:
-        result = catalog.apply_hidden_models(base_models(), {"deepseek-v4-flash"})
+        result = catalog.apply_hidden_models(base_models(), {"deepseek-v4.1-flash"})
 
         assert result[0]["visibility"] == "hide"
         assert result[1].get("visibility") != "hide"
@@ -147,10 +147,10 @@ class TestAnnouncements:
         )
 
         assert all(m.get("availability_nux") is None for m in models)
-        assert announced == {"deepseek-v4-flash": 0.0, "deepseek-v4-pro": 0.0}
+        assert announced == {"deepseek-v4.1-flash": 0.0, "deepseek-v4-pro": 0.0}
 
     def test_new_model_announces_within_window(self) -> None:
-        announced = {"deepseek-v4-flash": 1_000_000.0, "deepseek-v4-pro": 1_000_000.0}
+        announced = {"deepseek-v4.1-flash": 1_000_000.0, "deepseek-v4-pro": 1_000_000.0}
         models = base_models() + [
             {
                 "slug": "brand-new",
@@ -194,7 +194,7 @@ class TestRenderRuntimeCatalog:
             json.dump(
                 {
                     "version": 1,
-                    "models": [{"slug": "deepseek-v4-flash", "display_name": "Flash Renamed"}],
+                    "models": [{"slug": "deepseek-v4.1-flash", "display_name": "Flash Renamed"}],
                 },
                 f,
             )
@@ -204,10 +204,10 @@ class TestRenderRuntimeCatalog:
         rendered = catalog.render_runtime_catalog(minimal_compact())
         by_slug = {m["slug"]: m for m in rendered["models"]}
 
-        assert by_slug["deepseek-v4-flash"]["display_name"] == "Flash Renamed"
+        assert by_slug["deepseek-v4.1-flash"]["display_name"] == "Flash Renamed"
         assert by_slug["deepseek-v4-pro"]["visibility"] == "hide"
         # Announcements pass through: availability_nux stays None on first run.
-        assert by_slug["deepseek-v4-flash"]["availability_nux"] is None
+        assert by_slug["deepseek-v4.1-flash"]["availability_nux"] is None
 
     def test_render_is_canonical_after_overlay(self) -> None:
         rendered = catalog.render_runtime_catalog(minimal_compact())
@@ -272,7 +272,7 @@ class TestRuntimeRefresh:
             json.dump(minimal_compact(), f)
         with open(os.path.join(state, "user-models.json"), "w") as f:
             json.dump(
-                {"version": 1, "models": [{"slug": "deepseek-v4-flash", "display_name": "Renamed"}]},
+                {"version": 1, "models": [{"slug": "deepseek-v4.1-flash", "display_name": "Renamed"}]},
                 f,
             )
 

@@ -31,7 +31,7 @@ Commit: (next)
 Collectors pulled all comments: cubic ran 3 passes on PR 21 (12 + 35 + 5
 issues), CodeRabbit skipped (base-branch reviews disabled), Socket passes,
 chatgpt-codex-connector left P1/P2 notes. Stack PRs 3-8 all fail CI on one
-stale test (test_models_endpoint expecting deepseek-v4-flash in an empty
+stale test (test_models_endpoint expecting deepseek-v4.1-flash in an empty
 models list); PR 21's catalog seeding fixes the underlying case when merged.
 
 Triage of real, actionable findings (P1 first):

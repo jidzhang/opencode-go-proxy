@@ -107,9 +107,9 @@ def test_capture_excludes_prefixed_and_opencode_go_slugs(script_bin) -> None:
     polluted = {
         "models": [
             {"slug": "gpt-5.6-luna", "display_name": "Luna"},
-            {"slug": "opencode-go/deepseek-v4-flash", "display_name": "Prefixed"},
+            {"slug": "opencode-go/deepseek-v4.1-flash", "display_name": "Prefixed"},
             {"slug": "opencode-go-messages/qwen3.7-max", "display_name": "Prefixed2"},
-            {"slug": "deepseek-v4-flash", "display_name": "Bare opencode-go"},
+            {"slug": "deepseek-v4.1-flash", "display_name": "Bare opencode-go"},
         ]
     }
     bin_path = script_bin("codex", _fake_codex_body(polluted))
@@ -161,7 +161,7 @@ def test_merged_catalog_contains_native_and_opencode_go_entries() -> None:
     slugs = {m["slug"] for m in merged["models"]}
     assert "gpt-5.6-luna" in slugs  # native entry, captured slug
     assert "gpt-5.6-terra" in slugs
-    assert "opencode-go/deepseek-v4-flash" in slugs
+    assert "opencode-go/deepseek-v4.1-flash" in slugs
     luna = next(m for m in merged["models"] if m["slug"] == "gpt-5.6-luna")
     assert luna["multi_agent_version"] == "v1"
     assert luna["context_window"] == 272000
@@ -175,7 +175,7 @@ def test_merged_catalog_without_capture_is_opencode_go_only() -> None:
     merged = catalog.render_merged_catalog()
     slugs = {m["slug"] for m in merged["models"]}
     assert "gpt-5.6-luna" not in slugs
-    assert "opencode-go/deepseek-v4-flash" in slugs
+    assert "opencode-go/deepseek-v4.1-flash" in slugs
 
 
 def test_go_reasoning_levels_are_forwarded_verbatim() -> None:
@@ -198,7 +198,7 @@ def test_go_reasoning_levels_are_forwarded_verbatim() -> None:
         "client_version": "0.147.0",
         "models": [
             {
-                "slug": "deepseek-v4-flash",
+                "slug": "deepseek-v4.1-flash",
                 "display_name": "DeepSeek V4 Flash",
                 "context_window": 100000,
                 "supported_reasoning_levels": levels,
@@ -210,6 +210,6 @@ def test_go_reasoning_levels_are_forwarded_verbatim() -> None:
     _seed_native_capture()  # native vocabulary is low/medium/max/high/ultra
     merged = catalog.render_merged_catalog()
     entry = next(
-        m for m in merged["models"] if m["slug"] == "opencode-go/deepseek-v4-flash"
+        m for m in merged["models"] if m["slug"] == "opencode-go/deepseek-v4.1-flash"
     )
     assert entry["supported_reasoning_levels"] == levels

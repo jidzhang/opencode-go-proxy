@@ -14,14 +14,14 @@ class CacheTrackerTests(unittest.TestCase):
 
     def test_records_hits_and_misses_per_model(self) -> None:
         tracker = CacheTracker()
-        tracker.record("deepseek-v4-flash", hit=900, miss=10)
-        tracker.record("deepseek-v4-flash", hit=950, miss=5)
+        tracker.record("deepseek-v4.1-flash", hit=900, miss=10)
+        tracker.record("deepseek-v4.1-flash", hit=950, miss=5)
         tracker.record("mimo-v2.5", hit=0, miss=100)
 
         snap = tracker.snapshot()
         self.assertEqual(len(snap["models"]), 2)
 
-        ds = next(m for m in snap["models"] if m["model"] == "deepseek-v4-flash")
+        ds = next(m for m in snap["models"] if m["model"] == "deepseek-v4.1-flash")
         self.assertEqual(ds["cache_hit_tokens"], 1850)
         self.assertEqual(ds["cache_miss_tokens"], 15)
         self.assertEqual(ds["requests"], 2)
@@ -36,7 +36,7 @@ class CacheTrackerTests(unittest.TestCase):
 
     def test_negative_counts_are_ignored(self) -> None:
         tracker = CacheTracker()
-        tracker.record("deepseek-v4-flash", hit=-1, miss=5)
+        tracker.record("deepseek-v4.1-flash", hit=-1, miss=5)
         snap = tracker.snapshot()
         self.assertEqual(snap["totals"]["cache_miss_tokens"], 0)
 
