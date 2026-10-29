@@ -50,11 +50,20 @@ POOL_REPORT_ENV = "OPENCODE_GO_PROXY_POOL_REPORT_EVERY"
 _DEFAULT_REPORT_EVERY = 100
 
 _DEFAULT_SIZE = 8
-# Matched to the upstream prefix-cache lifetime: the cached prefix (and the TLS
-# session serving it) stays valid for tens of minutes, so a think-pause between
-# turns must not force a fresh handshake. A peer that closed the idle socket
-# anyway is handled by the stale-connection retry below.
-_DEFAULT_IDLE_SEC = 1800.0
+# Kept for an hour. Two independent facts set this: the upstream prefix cache
+# survives hours of disuse (DeepSeek documents "a few hours to a few days"), and
+# a fresh TLS handshake measured 4.1s of a 7.1s first-byte on a 1MB body while
+# the same request on a warm socket took 2.95s. The cache itself is
+# content-addressed and does not need the socket, so this only buys the
+# handshake - which is exactly what a think-pause between turns would repay.
+_DEFAULT_IDLE_SEC = 3600.0
+# TCP keepalive. Without it a socket whose peer vanished silently (NAT entry
+# expired, server rebooted) looks alive until the request timeout expires, so a
+# long idle window would turn into a long hang instead of a cheap reconnect.
+# Probes keep the NAT mapping alive and surface a dead peer in about a minute.
+_KEEPALIVE_IDLE_SEC = 60
+_KEEPALIVE_INTERVAL_SEC = 15
+_KEEPALIVE_PROBES = 3
 
 # Failures that mark a *reused* connection as stale (the server closed it
 # while idle) and justify one transparent retry on a fresh connection. Timeouts
@@ -297,6 +306,31 @@ def _request_headers(req: urllib.request.Request) -> dict[str, str] | None:
     return headers
 
 
+def _enable_keepalive(conn: Any) -> None:
+    """Turn on TCP keepalive for a connected socket; best-effort.
+
+    Windows exposes the knob through ioctl(SIO_KEEPALIVE_VALS); POSIX uses
+    TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT. Anything unsupported is ignored: a
+    missing probe is a missed optimisation, never a failed request.
+    """
+    sock = getattr(conn, "sock", None)
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, _KEEPALIVE_IDLE_SEC)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, _KEEPALIVE_INTERVAL_SEC)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, _KEEPALIVE_PROBES)
+        elif hasattr(socket, "SIO_KEEPALIVE_VALS"):
+            sock.ioctl(
+                socket.SIO_KEEPALIVE_VALS,
+                (_KEEPALIVE_IDLE_SEC * 1000, _KEEPALIVE_INTERVAL_SEC * 1000, _KEEPALIVE_PROBES),
+            )
+    except (OSError, AttributeError, ValueError):
+        pass
+
+
 def _send_on(
     conn: Any,
     method: str,
@@ -361,6 +395,13 @@ def _pooled_do_open(
     except Exception:  # noqa: BLE001 - debug level is best-effort
         pass
     try:
+        # Connect first so keepalive is armed before the request; http.client
+        # reuses the established socket in request(). Test doubles need not
+        # implement connect(): keepalive is an optimisation, not a requirement.
+        connect = getattr(conn, "connect", None)
+        if callable(connect):
+            connect()
+            _enable_keepalive(conn)
         resp = _send_on(conn, method, selector, data, headers, encode_chunked)
     except OSError as err:
         _quiet_close(conn)
