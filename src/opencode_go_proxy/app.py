@@ -47,7 +47,7 @@ from .guards import (
     validate_bind_security,
 )
 from .passthrough import relay_native_request
-from .protocol import known_models
+from .protocol import known_models, require_model
 from .quota import read_quota_state
 from .routing import is_known_model_slug, route_target
 from .state import build_state
@@ -255,13 +255,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _request_model(payload: Json) -> str:
-        raw_model = payload.get("model")
-        if not isinstance(raw_model, str) or not raw_model:
-            raise ProxyError(
-                HTTPStatus.BAD_REQUEST,
-                "model must be a non-empty string",
-                error_type="invalid_request_error",
-            )
+        raw_model = require_model(payload)
         if not is_known_model_slug(raw_model):
             raise ProxyError(
                 HTTPStatus.BAD_REQUEST,

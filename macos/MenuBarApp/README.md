@@ -11,7 +11,7 @@ The menu bar shows a small branch icon (no long "opencode go/" text). The menu s
 - Quota section: remaining/limit per provider plus reset countdown, or `n/a`
   when the upstream sent no rate-limit headers yet
 - Today's turns and tokens, plus a 7-day token bar list (from `GET /state`)
-- current model (the most recent meter event, else the proxy default)
+- current model (the most recent meter event; null until one exists - the proxy has no default model)
 - Start/Stop Proxy: launches `uvx --from git+... opencode-go-proxy` as a child process,
   writing logs to `~/.codex/logs/opencode-go-proxy.{log,err}`
 - Open Logs / Reveal Log File

@@ -56,6 +56,7 @@ from .protocol import (
     new_response_id,
     normalize_usage,
     now_unix,
+    require_model,
     responses_input_to_chat_messages,
     responses_payload_to_chat_payload,
     responses_tools_to_chat_tools,
@@ -1379,29 +1380,6 @@ def call_family_responses(
     return response
 
 
-def call_zen_responses(payload: Json, config: ProxyConfig, request_id: str) -> Json:
-    """Non-stream Responses call through the routed Zen family."""
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
-    bare_id = bare_zen_id(model)
-    return call_family_responses(
-        payload,
-        config,
-        request_id,
-        model=model,
-        bare_id=bare_id,
-        family=zen_family_for(bare_id),
-        api_key=resolve_api_key(config, request_id),
-        base_url=zen_base_url(),
-        provider=ZEN_PROVIDER,
-    )
-
-
 class _ZenStreamEngine:
     """Translate one zen SSE stream into Responses events.
 
@@ -2451,13 +2429,7 @@ def handle_family_responses_request(
 
 def handle_zen_responses_request(handler: Any, payload: Json, config: ProxyConfig, request_id: str) -> None:
     """Serve a /v1/responses request for a zen-routed model."""
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
+    model = require_model(payload)
     ensure_zen_slug(model)
     bare_id = bare_zen_id(model)
     handle_family_responses_request(
@@ -2483,13 +2455,7 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
     answers 200; non-200 upstream answers relay their own status and body.
     """
     started = time.time()
-    model = payload.get("model")
-    if not isinstance(model, str) or not model:
-        raise ProxyError(
-            HTTPStatus.BAD_REQUEST,
-            "model must be a non-empty string",
-            error_type="invalid_request_error",
-        )
+    model = require_model(payload)
     ensure_zen_slug(model)
     bare_id = bare_zen_id(model)
     api_key = resolve_api_key(config, request_id)

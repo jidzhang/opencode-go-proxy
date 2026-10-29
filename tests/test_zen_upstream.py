@@ -152,6 +152,26 @@ def _request_headers(req: urllib.request.Request) -> dict[str, str]:
     return {name.lower(): value for name, value in req.headers.items()}
 
 
+def _call_zen_responses(payload, config, request_id):
+    """Test stand-in for the deleted non-stream zen wrapper: resolve the bare
+    id and wire family and key exactly as the live dispatcher does."""
+    model = payload["model"]
+    from opencode_go_proxy.secrets import resolve_api_key
+    from opencode_go_proxy.zen_upstream import (
+        bare_zen_id,
+        call_family_responses,
+        zen_base_url,
+        zen_family_for,
+    )
+    bare = bare_zen_id(model)
+    return call_family_responses(
+        payload, config, request_id,
+        model=model, bare_id=bare, family=zen_family_for(bare),
+        api_key=resolve_api_key(config, request_id), base_url=zen_base_url(),
+        provider="zen",
+    )
+
+
 class TestFamilyDispatch:
     @pytest.mark.parametrize(
         ("slug", "expected_path", "auth_header"),
@@ -216,7 +236,7 @@ class TestChatFamily:
             return mock.Mock(status=200, headers={}, read=lambda: raw, __enter__=lambda s: s, __exit__=lambda *a: False)
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            response = zen_upstream.call_zen_responses(zen_payload(stream=False), make_config(), "req")
+            response = _call_zen_responses(zen_payload(stream=False), make_config(), "req")
 
         assert len(captured) == 1
         sent = _request_body(captured[0])
@@ -285,7 +305,7 @@ class TestChatFamily:
         body = b'{"type":"error","error":{"type":"AuthError","message":"invalid key"},"metadata":{}}'
         with mock.patch("urllib.request.urlopen", side_effect=http_error(401, body=body)), \
              pytest.raises(ProxyError) as ctx:
-            zen_upstream.call_zen_responses(zen_payload(stream=False), make_config(), "req")
+            _call_zen_responses(zen_payload(stream=False), make_config(), "req")
         assert ctx.value.status == HTTPStatus.UNAUTHORIZED
         assert ctx.value.error_type == "AuthError"
         assert ctx.value.message == "invalid key"
@@ -303,7 +323,7 @@ class TestChatFamily:
         with mock.patch("urllib.request.urlopen", side_effect=rate_limited), \
              mock.patch("opencode_go_proxy.upstream.time.sleep"), \
              pytest.raises(ProxyError) as ctx:
-            zen_upstream.call_zen_responses(zen_payload(stream=False), make_config(), "req")
+            _call_zen_responses(zen_payload(stream=False), make_config(), "req")
         assert ctx.value.status == HTTPStatus.TOO_MANY_REQUESTS
         assert "retry after 7s" in ctx.value.message
 
@@ -340,7 +360,7 @@ class TestResponsesFamily:
             return mock.Mock(status=200, headers={}, read=lambda: raw, __enter__=lambda s: s, __exit__=lambda *a: False)
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            response = zen_upstream.call_zen_responses(zen_payload(model="zen/gpt-5.6", stream=False), make_config(), "req")
+            response = _call_zen_responses(zen_payload(model="zen/gpt-5.6", stream=False), make_config(), "req")
 
         assert response["output_text"] == "hi"
         # The upstream sees the bare id, not the zen/ prefix.
@@ -805,7 +825,7 @@ class TestAnthropicFamily:
             return mock.Mock(status=200, headers={}, read=lambda: raw, __enter__=lambda s: s, __exit__=lambda *a: False)
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            response = zen_upstream.call_zen_responses(
+            response = _call_zen_responses(
                 zen_payload(model="zen/claude-sonnet-4", stream=False), make_config(), "req"
             )
         assert response["output_text"] == "Sure"
@@ -977,7 +997,7 @@ class TestGeminiFamily:
             return mock.Mock(status=200, headers={}, read=lambda: raw, __enter__=lambda s: s, __exit__=lambda *a: False)
 
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            response = zen_upstream.call_zen_responses(
+            response = _call_zen_responses(
                 zen_payload(model="zen/gemini-3-pro", stream=False), make_config(), "req"
             )
         assert response["output_text"] == "Hi there"

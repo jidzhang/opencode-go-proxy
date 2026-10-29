@@ -7,7 +7,8 @@ struct ServerState: Decodable, Equatable {
     let upstream: String
     let quota: QuotaSnapshot?
     let usage: UsageSummary
-    let model: String
+    /// Null when no meter event exists yet (the proxy has no default model).
+    let model: String?
     /// Update-support additions (0.4.7). Optional so a pre-0.4.5 proxy whose
     /// /state omits these keys still decodes; the version row then falls
     /// back to a separate GET /version.

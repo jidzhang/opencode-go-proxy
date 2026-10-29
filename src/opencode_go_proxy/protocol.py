@@ -5,10 +5,11 @@ import os
 import re
 import time
 import uuid
+from http import HTTPStatus
 from typing import Any
 
 from .codex_tools import merge_codex_app_tools
-from .errors import env_flag
+from .errors import ProxyError, env_flag
 from .routing import normalize_model_slug, route_target
 from .trace import trace
 
@@ -236,6 +237,23 @@ def model_context_window(model: str) -> int | None:
     windows = _catalog_views()[3]
     return windows.get(model) or windows.get(f"opencode-go/{normalize_model_slug(model)}")
 
+
+
+def require_model(payload: Json) -> str:
+    """Return the request's model, raising 400 when it is missing or blank.
+
+    Single source of the "no default model" contract: every surface rejects the
+    same shape with the same error, and a caller that also wants catalog
+    membership checked (the HTTP dispatcher) adds that on top.
+    """
+    model = payload.get("model") if isinstance(payload, dict) else None
+    if not isinstance(model, str) or not model:
+        raise ProxyError(
+            HTTPStatus.BAD_REQUEST,
+            "model must be a non-empty string",
+            error_type="invalid_request_error",
+        )
+    return model
 
 
 def new_response_id() -> str:
@@ -896,11 +914,17 @@ def responses_payload_to_chat_payload(payload: Json) -> tuple[Json, str, Json]:
             chat_payload[key] = value
 
     # Responses carries structured output as text.format; the chat shape spells
-    # the same thing response_format. Pass the schema through unchanged rather
-    # than letting the model answer in prose.
+    # the same thing response_format. The json_schema flavor also differs in
+    # shape: Responses nests name/schema/strict at the top level while chat
+    # wants them under a "json_schema" key, so translate rather than forward.
     text_config = payload.get("text")
-    if isinstance(text_config, dict) and text_config.get("format") is not None:
-        chat_payload["response_format"] = text_config["format"]
+    fmt = text_config.get("format") if isinstance(text_config, dict) else None
+    if fmt is not None:
+        if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+            nested = {k: v for k, v in fmt.items() if k != "type"}
+            chat_payload["response_format"] = {"type": "json_schema", "json_schema": nested}
+        else:
+            chat_payload["response_format"] = fmt
 
     effort = extract_reasoning_effort(payload)
     if effort is not None:
@@ -928,7 +952,8 @@ def chat_completion_to_response(
     # content-filtered turn indistinguishable from a clean stop, so a client
     # kept going believing the model finished.
     finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
-    status = "completed" if finish_reason in (None, "stop", "tool_calls") else "incomplete"
+    completed_reasons = (None, "", "stop", "tool_calls", "function_call")
+    status = "completed" if finish_reason in completed_reasons else "incomplete"
     return {
         "id": response_id,
         "object": "response",
