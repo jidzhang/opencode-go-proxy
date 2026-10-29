@@ -107,6 +107,8 @@ def trace_enabled() -> bool:
 _queue: queue.Queue = queue.Queue(maxsize=_QUEUE_SIZE)
 _writer_started = False
 _writer_lock = threading.Lock()
+_writer_thread: threading.Thread | None = None
+_stop = threading.Event()
 _dropped = 0
 _dropped_lock = threading.Lock()
 
@@ -118,9 +120,11 @@ def trace_dropped_count() -> int:
 
 
 def _writer_loop() -> None:
-    while True:
+    while not _stop.is_set():
         try:
-            first = _queue.get()
+            first = _queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
         except Exception:  # noqa: BLE001 - keep the writer alive
             continue
         batch = [first]
@@ -144,8 +148,9 @@ def _writer_loop() -> None:
             sys.stderr.write("\n".join(lines) + "\n")
             sys.stderr.flush()
         except OSError:
-            # stderr gone (shutdown / closed pipe): drop the batch, stay alive.
-            # (No task_done bookkeeping: nothing ever calls queue.join().)
+            # stderr gone (shutdown / closed pipe): drop the batch, stay alive
+            # until told to stop. (No task_done bookkeeping: nothing ever calls
+            # queue.join().)
             pass
 
 
@@ -159,12 +164,24 @@ def _ensure_writer() -> None:
         thread = threading.Thread(target=_writer_loop, daemon=True, name="trace-writer")
         thread.start()
         _writer_started = True
+        _writer_thread = thread
         atexit.register(_drain_at_exit)
 
 
 def _drain_at_exit() -> None:
-    """Best-effort synchronous flush of pending lines at interpreter exit."""
+    """Stop the writer thread, then flush pending lines synchronously.
+
+    Stopping first is what prevents the Fatal Python error noise on shutdown:
+    a daemon writer that is still running when the interpreter finalizes races
+    the closing of stderr and prints a buffered-writer lock crash stack on
+    every stop. Signaling and joining it here (atexit runs before daemon
+    threads are killed) means finalization never catches it mid-write.
+    """
     try:
+        _stop.set()
+        thread = _writer_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
         lines = []
         while True:
             try:

@@ -72,8 +72,6 @@ def response(value: dict) -> mock.Mock:
 
 
 def test_certified_catalog_has_all_certified_models_in_their_families() -> None:
-    # 37 since deepseek-v4-flash was removed (upstream deprecated it; every
-    # request answered 410 ModelDeprecated).
     assert len(DOCUMENTED_GO_MODELS) == 37
     assert len(DOCUMENTED_RESPONSES_MODELS) == 6
     assert len(DOCUMENTED_CHAT_MODELS) == 22

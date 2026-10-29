@@ -200,6 +200,18 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
     # request so the error-path drain knows what is still unread.
     _body_bytes_read = 0
 
+    def log_message(self, format: str, *args: Any) -> None:
+        """Route the stdlib access log through the leveled trace stream.
+
+        BaseHTTPRequestHandler writes one plain-text line per request straight
+        to stderr, bypassing every level filter: it could not be silenced by
+        OPENCODE_GO_PROXY_LOG_LEVEL or OPENCODE_GO_PROXY_TRACE and made up
+        roughly half of the log volume. Emitting it as a debug-level record
+        puts it under the same switch as everything else and keeps the
+        machine-readable one-object-per-line format.
+        """
+        trace("http.access", level="debug", message=format % args)
+
     def _guard_request(self) -> None:
         """Enforce the local or explicitly authenticated remote boundary."""
         check_host(self.headers.get("Host"))
