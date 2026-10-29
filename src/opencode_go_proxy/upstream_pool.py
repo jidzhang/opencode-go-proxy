@@ -50,7 +50,11 @@ POOL_REPORT_ENV = "OPENCODE_GO_PROXY_POOL_REPORT_EVERY"
 _DEFAULT_REPORT_EVERY = 100
 
 _DEFAULT_SIZE = 8
-_DEFAULT_IDLE_SEC = 60.0
+# Matched to the upstream prefix-cache lifetime: the cached prefix (and the TLS
+# session serving it) stays valid for tens of minutes, so a think-pause between
+# turns must not force a fresh handshake. A peer that closed the idle socket
+# anyway is handled by the stale-connection retry below.
+_DEFAULT_IDLE_SEC = 1800.0
 
 # Failures that mark a *reused* connection as stale (the server closed it
 # while idle) and justify one transparent retry on a fresh connection. Timeouts
