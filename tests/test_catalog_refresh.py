@@ -45,7 +45,7 @@ def make_compact(fetched_at: str) -> dict:
         "client_version": "0.147.0",
         "models": [
             {
-                "slug": "deepseek-v4-flash",
+                "slug": "deepseek-v4.1-flash",
                 "display_name": "Existing Model",
                 "description": "Already known.",
                 "default_reasoning_level": "medium",
@@ -111,7 +111,7 @@ class RefreshCatalogTests(unittest.TestCase):
                 now=self.now,
             )
 
-        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4-flash")
+        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4.1-flash")
         with open(self.compact_path) as f:
             compact = json.load(f)
         self.assertNotEqual(compact["fetched_at"], self.now.isoformat())
@@ -138,7 +138,7 @@ class RefreshCatalogTests(unittest.TestCase):
 
         self.assertEqual(
             [m["slug"] for m in rendered["models"]],
-            ["deepseek-v4-flash", "glm-5.3"],
+            ["deepseek-v4.1-flash", "glm-5.3"],
         )
         with open(self.compact_path) as f:
             compact = json.load(f)
@@ -159,7 +159,7 @@ class RefreshCatalogTests(unittest.TestCase):
         with open(self.compact_path) as f:
             compact = json.load(f)
         self.assertEqual(compact["fetched_at"], self.now.isoformat())
-        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4-flash")
+        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4.1-flash")
 
     def test_refresh_disabled_by_env(self) -> None:
         self._write_compact((self.now - datetime.timedelta(hours=25)).isoformat())
@@ -176,7 +176,7 @@ class RefreshCatalogTests(unittest.TestCase):
                 now=self.now,
             )
 
-        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4-flash")
+        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4.1-flash")
         with open(self.compact_path) as f:
             compact = json.load(f)
         self.assertNotEqual(compact["fetched_at"], self.now.isoformat())
@@ -194,7 +194,7 @@ class RefreshCatalogTests(unittest.TestCase):
                 now=self.now,
             )
 
-        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4-flash")
+        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4.1-flash")
         with open(self.compact_path) as f:
             compact = json.load(f)
         self.assertNotEqual(compact["fetched_at"], self.now.isoformat())
@@ -216,7 +216,7 @@ class RefreshCatalogTests(unittest.TestCase):
                 seed_path=seed_path,
                 now=self.now,
             )
-        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4-flash")
+        self.assertEqual(rendered["models"][0]["slug"], "deepseek-v4.1-flash")
         self.assertTrue(os.path.exists(self.catalog_path))
 
     def test_etag_is_stored_and_sent_as_if_none_match_on_next_refresh(self) -> None:
@@ -228,7 +228,7 @@ class RefreshCatalogTests(unittest.TestCase):
             if state["respond_304"]:
                 raise urllib.error.HTTPError(request.full_url, 304, "Not Modified", {}, None)
             return _FakeResponse(
-                {"data": [{"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash"}]},
+                {"data": [{"id": "deepseek-v4.1-flash", "name": "DeepSeek V4 Flash"}]},
                 headers={"ETag": 'W/"models-dev-v7"'},
             )
 
@@ -266,7 +266,7 @@ class RefreshCatalogTests(unittest.TestCase):
             if state["respond_304"]:
                 raise urllib.error.HTTPError(request.full_url, 304, "Not Modified", {}, None)
             return _FakeResponse(
-                {"data": [{"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash"}]},
+                {"data": [{"id": "deepseek-v4.1-flash", "name": "DeepSeek V4 Flash"}]},
                 headers={"ETag": 'W/"models-dev-v9"'},
             )
 
@@ -313,7 +313,7 @@ class RefreshCatalogTests(unittest.TestCase):
 
         def fake_urlopen(request, *args, **kwargs):
             return _FakeResponse(
-                {"data": [{"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash"}]}
+                {"data": [{"id": "deepseek-v4.1-flash", "name": "DeepSeek V4 Flash"}]}
             )
 
         with mock.patch("opencode_go_proxy.catalog.urllib.request.urlopen", side_effect=fake_urlopen):

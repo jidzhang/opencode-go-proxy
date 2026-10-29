@@ -16,10 +16,10 @@ from opencode_go_proxy.protocol import (
 class ProtocolTests(unittest.TestCase):
     def test_string_input_maps_to_user_message(self) -> None:
         chat, _model, stats = responses_payload_to_chat_payload(
-            {"model": "deepseek-v4-flash", "instructions": "be terse", "input": "hello"}
+            {"model": "deepseek-v4.1-flash", "instructions": "be terse", "input": "hello"}
         )
 
-        self.assertEqual(chat["model"], "deepseek-v4-flash")
+        self.assertEqual(chat["model"], "deepseek-v4.1-flash")
         self.assertIs(chat["stream"], False)
         self.assertEqual(
             chat["messages"],
@@ -70,7 +70,7 @@ class ProtocolTests(unittest.TestCase):
     def test_custom_freeform_tools_convert_to_input_function_tools(self) -> None:
         chat, _model, stats = responses_payload_to_chat_payload(
             {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "input": "patch the file",
                 "tools": [
                     {
@@ -99,7 +99,7 @@ class ProtocolTests(unittest.TestCase):
     def test_reasoning_content_replays_before_tool_calls(self) -> None:
         chat, _model, stats = responses_payload_to_chat_payload(
             {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "input": [
                     {"type": "message", "role": "user", "content": "inspect"},
                     {
@@ -126,7 +126,7 @@ class ProtocolTests(unittest.TestCase):
     def test_reasoning_summary_replays_before_tool_calls(self) -> None:
         chat, _model, stats = responses_payload_to_chat_payload(
             {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "input": [
                     {"type": "message", "role": "user", "content": "inspect"},
                     {
@@ -189,7 +189,7 @@ class ProtocolTests(unittest.TestCase):
     def test_chat_completion_maps_to_response_message(self) -> None:
         response = chat_completion_to_response(
             {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "choices": [{"message": {"role": "assistant", "content": "DEEPSEEK_OK"}}],
                 "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
             }
@@ -251,7 +251,7 @@ class ProtocolTests(unittest.TestCase):
         response = chat_completion_to_response(
             {
                 "id": "chat_1",
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "choices": [
                     {
                         "index": 0,
@@ -283,7 +283,7 @@ class ProtocolTests(unittest.TestCase):
         """When Codex replays a namespaced function_call, proxy must flatten for upstream."""
         chat, _model, _stats = responses_payload_to_chat_payload(
             {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "input": [
                     {"type": "function_call", "name": "click", "namespace": "mcp__computer_use",
                      "call_id": "call_789", "arguments": '{"x": 1}'},
@@ -298,7 +298,7 @@ class ProtocolTests(unittest.TestCase):
     def test_namespace_tools_flattened_with_prefix(self) -> None:
         chat, _model, stats = responses_payload_to_chat_payload(
             {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "input": "click",
                 "tools": [
                     {
@@ -390,7 +390,7 @@ class CacheAccountingTests(unittest.TestCase):
 
     def test_tool_choice_function_shape_translated_to_chat(self) -> None:
         chat_payload, _, _ = responses_payload_to_chat_payload({
-            "model": "opencode-go/deepseek-v4-flash",
+            "model": "opencode-go/deepseek-v4.1-flash",
             "input": "hi",
             "tools": [{"type": "function", "name": "read_file"}],
             "tool_choice": {"type": "function", "name": "read_file"},
@@ -401,7 +401,7 @@ class CacheAccountingTests(unittest.TestCase):
 
     def test_tool_choice_auto_translated_to_string(self) -> None:
         chat_payload, _, _ = responses_payload_to_chat_payload({
-            "model": "opencode-go/deepseek-v4-flash",
+            "model": "opencode-go/deepseek-v4.1-flash",
             "input": "hi",
             "tools": [{"type": "function", "name": "read_file"}],
             "tool_choice": {"type": "auto"},
@@ -411,7 +411,7 @@ class CacheAccountingTests(unittest.TestCase):
     def test_chat_completion_response_carries_cache_usage_through(self) -> None:
         response = chat_completion_to_response(
             {
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4.1-flash",
                 "choices": [{"message": {"role": "assistant", "content": "ok"}}],
                 "usage": {
                     "prompt_tokens": 100,
@@ -553,7 +553,7 @@ class ImageRoutingTests(unittest.TestCase):
         catalog = self._write_catalog(
             [
                 {
-                    "slug": "deepseek-v4-flash",
+                    "slug": "deepseek-v4.1-flash",
                     "input_modalities": ["text", "image"],
                 },
                 {"slug": "mimo-v2.5", "input_modalities": ["text", "image"]},
@@ -561,10 +561,10 @@ class ImageRoutingTests(unittest.TestCase):
         )
         with mock.patch.dict(os.environ, {"CODEX_MODEL_CATALOG": catalog}):
             chat, _model, stats = responses_payload_to_chat_payload(
-                self._image_payload("deepseek-v4-flash")
+                self._image_payload("deepseek-v4.1-flash")
             )
-        self.assertEqual(chat["model"], "deepseek-v4-flash")
-        self.assertEqual(stats["upstream_model"], "deepseek-v4-flash")
+        self.assertEqual(chat["model"], "deepseek-v4.1-flash")
+        self.assertEqual(stats["upstream_model"], "deepseek-v4.1-flash")
 
     def test_image_turn_keeps_requested_model_verbatim(self) -> None:
         catalog = self._write_catalog(

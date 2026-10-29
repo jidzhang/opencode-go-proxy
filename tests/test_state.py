@@ -53,11 +53,11 @@ class TestUsageSummary:
         assert all(day["tokens"] == 0 for day in summary["last7d"])
 
     def test_today_counts_and_day_buckets(self) -> None:
-        record_at(datetime.datetime(2026, 8, 11, 3, 30, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 11, 3, 30, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, input_tokens=40, output_tokens=10, total_tokens=50)
-        record_at(datetime.datetime(2026, 8, 11, 2, 0, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 11, 2, 0, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=100)
-        record_at(datetime.datetime(2026, 8, 10, 12, 0, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 10, 12, 0, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=30)
         record_at(datetime.datetime(2026, 8, 3, 12, 0, tzinfo=UTC), model="deepseek-v4-pro",
                   status=200, duration_ms=100, total_tokens=10)
@@ -100,9 +100,9 @@ class TestUsageSummary:
 
         from opencode_go_proxy.meter import usage_events_path
 
-        record_at(datetime.datetime(2026, 8, 11, 3, 30, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 11, 3, 30, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=50, provider="zen")
-        record_at(datetime.datetime(2026, 8, 11, 2, 0, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 11, 2, 0, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=25)
         folded = build_state(port=8787, upstream="u", now=NOW)
         _os.utime(usage_events_path())
@@ -226,13 +226,13 @@ class TestUsageKey:
         }
 
     def test_zen_rollup_buckets_provider_events(self) -> None:
-        record_at(datetime.datetime(2026, 8, 11, 3, 30, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 11, 3, 30, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=50, provider="zen")
-        record_at(datetime.datetime(2026, 8, 11, 2, 0, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 11, 2, 0, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=100, provider="zen")
-        record_at(datetime.datetime(2026, 8, 10, 12, 0, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 10, 12, 0, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=30, provider="zen")
-        record_at(datetime.datetime(2026, 8, 11, 1, 0, tzinfo=UTC), model="deepseek-v4-flash",
+        record_at(datetime.datetime(2026, 8, 11, 1, 0, tzinfo=UTC), model="deepseek-v4.1-flash",
                   status=200, duration_ms=100, total_tokens=999)
         state = build_state(port=8787, upstream="u", now=NOW)
         zen = state["usage"]["zen"]

@@ -27,8 +27,8 @@ from opencode_go_proxy.usage_poller import clear_cache as clear_usage_poller_cac
 
 SCRATCH_PORT_PREFERRED = 8795
 PROXY_TIMEOUT_SEC = 2.0
-MODEL = "deepseek-v4-flash"
-ZEN_MODEL = "zen/deepseek-v4-flash"
+MODEL = "deepseek-v4.1-flash"
+ZEN_MODEL = "zen/deepseek-v4.1-flash"
 SUMMARY_TEXT = "The user asked to wire the widget to the backend; decision: REST over gRPC; open question: retry policy."
 ZEN_SUMMARY_TEXT = "Zen handoff summary: migrate the catalog render, keep the compact seed."
 
@@ -634,7 +634,7 @@ def test_zen_compaction_routes_through_zen_upstream(
     assert request.path == f"{ZEN_PATH_PREFIX}v1/chat/completions"
     chat = request.json_body
     assert chat["stream"] is False
-    assert chat["model"] == "deepseek-v4-flash"  # bare zen id on the wire
+    assert chat["model"] == "deepseek-v4.1-flash"  # bare zen id on the wire
     assert chat["messages"][1]["content"] == compaction.COMPACT_PROMPT
     events = meter_events()
     assert len(events) == 1

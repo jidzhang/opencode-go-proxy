@@ -37,12 +37,12 @@ class MeterRecordTests(unittest.TestCase):
 
     def test_happy_path_records_one_line(self) -> None:
         events = self._record(
-            model="deepseek-v4-flash", status=200, duration_ms=1500,
+            model="deepseek-v4.1-flash", status=200, duration_ms=1500,
             input_tokens=10, output_tokens=5, total_tokens=15,
         )
         self.assertEqual(len(events), 1)
         e = events[0]
-        self.assertEqual(e["model"], "deepseek-v4-flash")
+        self.assertEqual(e["model"], "deepseek-v4.1-flash")
         self.assertEqual(e["status"], 200)
         self.assertEqual(e["durationMs"], 1500)
         self.assertEqual(e["inputTokens"], 10)
@@ -52,7 +52,7 @@ class MeterRecordTests(unittest.TestCase):
 
     def test_canonical_schema_fields(self) -> None:
         events = self._record(
-            model="deepseek-v4-flash", status=200, duration_ms=1500,
+            model="deepseek-v4.1-flash", status=200, duration_ms=1500,
             input_tokens=10, output_tokens=5, total_tokens=15, retries=1,
         )
         e = events[0]
@@ -69,7 +69,7 @@ class MeterRecordTests(unittest.TestCase):
         self.assertNotIn("duration_ms", e)
 
     def test_stream_aborted_marks_and_omits_tokens(self) -> None:
-        events = self._record(model="deepseek-v4-flash", status=502, duration_ms=800, stream_aborted=True)
+        events = self._record(model="deepseek-v4.1-flash", status=502, duration_ms=800, stream_aborted=True)
         self.assertEqual(len(events), 1)
         e = events[0]
         self.assertEqual(e["status"], 502)

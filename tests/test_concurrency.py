@@ -139,7 +139,7 @@ def test_concurrent_nonstream_requests_do_not_interleave(pair) -> None:
 
     def worker(i: int) -> None:
         try:
-            resp = _post(port, {"model": "deepseek-v4-flash", "input": f"echo-{i}"})
+            resp = _post(port, {"model": "deepseek-v4.1-flash", "input": f"echo-{i}"})
             results[i] = resp["output_text"]
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
@@ -164,7 +164,7 @@ def test_concurrent_streams_are_isolated(pair) -> None:
 
     def worker(i: int) -> None:
         try:
-            resp = _post(port, {"model": "deepseek-v4-flash", "input": f"echo-{i}"}, stream=True)
+            resp = _post(port, {"model": "deepseek-v4.1-flash", "input": f"echo-{i}"}, stream=True)
             markers.append(resp["output_text"])
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)

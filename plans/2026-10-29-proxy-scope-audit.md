@@ -29,14 +29,14 @@ image-bearing turn to the winner. Three guesses stacked: price from a model's
 name, capability from this repo's seed file, and availability assumed.
 
 The third guess failed. Between 2026-10-27 19:04 and 2026-10-28 14:37 the
-auto-pick chose `deepseek-v4-flash`, which the upstream had deprecated:
+auto-pick chose `deepseek-v4.1-flash`, which the upstream had deprecated:
 
 | Fact | Evidence |
 |---|---|
 | Failed window | 2026-10-27 19:04:26 -> 2026-10-28 14:37:59 |
 | Affected turns | 875 distinct `request_id`s, two warn lines each |
-| Upstream answer | `{"type":"ModelDeprecated","message":"Model deepseek-v4-flash has been deprecated."}`, HTTP 410, 841 occurrences |
-| Caption side | 886 `split_turn.caption_failed` events, `engine` always `deepseek-v4-flash`, status 502 |
+| Upstream answer | `{"type":"ModelDeprecated","message":"Model deepseek-v4.1-flash has been deprecated."}`, HTTP 410, 841 occurrences |
+| Caption side | 886 `split_turn.caption_failed` events, `engine` always `deepseek-v4.1-flash`, status 502 |
 | Overlap | 841 of the 410-request ids coincide exactly with caption failures |
 
 The same slug was also `DEFAULT_MODEL` - one rotting constant deciding the

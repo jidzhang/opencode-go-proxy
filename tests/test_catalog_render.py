@@ -19,7 +19,7 @@ def compact_catalog() -> dict:
         "client_version": "0.147.0",
         "models": [
             {
-                "slug": "deepseek-v4-flash",
+                "slug": "deepseek-v4.1-flash",
                 "display_name": "DeepSeek V4 Flash",
                 "description": "Fast and cheap.",
                 "default_reasoning_level": "medium",
@@ -88,7 +88,7 @@ class RenderFullCatalogTests(unittest.TestCase):
     def test_renders_one_full_model_per_compact_model(self) -> None:
         rendered = render_full_catalog(compact_catalog())
 
-        self.assertEqual([m["slug"] for m in rendered["models"]], ["deepseek-v4-flash", "deepseek-v4-pro"])
+        self.assertEqual([m["slug"] for m in rendered["models"]], ["deepseek-v4.1-flash", "deepseek-v4-pro"])
         for model in rendered["models"]:
             self.assertEqual(model["base_instructions"], "Line one\nLine two\nLine three\n")
             self.assertIn("model_messages", model)
@@ -182,7 +182,7 @@ class WriteCatalogTests(unittest.TestCase):
             with open(out_path) as f:
                 reloaded = json.load(f)
 
-        self.assertEqual([m["slug"] for m in reloaded["models"]], ["deepseek-v4-flash", "deepseek-v4-pro"])
+        self.assertEqual([m["slug"] for m in reloaded["models"]], ["deepseek-v4.1-flash", "deepseek-v4-pro"])
         self.assertEqual(reloaded["models"][0]["base_instructions"], "Line one\nLine two\nLine three\n")
         self.assertEqual(
             reloaded["models"][0]["auto_compact_token_limit"],

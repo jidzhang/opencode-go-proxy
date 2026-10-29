@@ -42,7 +42,7 @@ HANG_SLEEP_SEC = 20.0
 MOCK_SETTLE_SEC = 0.2  # let the proxy consume the committed chunk before the RST lands
 STREAM_CHUNK_COUNT = 40
 STREAM_CHUNK_DELAY_SEC = 0.05  # spread chunks so the test can cancel mid-stream
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-v4.1-flash"
 
 MODE_401 = "401"
 MODE_429 = "429"

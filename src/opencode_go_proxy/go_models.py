@@ -41,7 +41,6 @@ DOCUMENTED_CHAT_MODELS: Final = frozenset(
         "longcat-2.5-preview-free",
         "deepseek-v4.1-flash",
         "deepseek-v4-pro",
-        "deepseek-v4-flash",
         "deepseek-v4-flash-vision-exp",
         "mimo-v2.6-flash",
         "mimo-v2.6-pro",

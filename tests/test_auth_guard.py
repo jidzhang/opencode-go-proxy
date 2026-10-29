@@ -75,7 +75,7 @@ def server():
 
 def chat_body() -> bytes:
     return json.dumps({
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-v4.1-flash",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": False,
     }).encode("utf-8")
@@ -85,7 +85,7 @@ def upstream_ok() -> MockUpstreamResponse:
     return MockUpstreamResponse(json.dumps({
         "id": "chatcmpl-1",
         "object": "chat.completion",
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-v4.1-flash",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
     }).encode("utf-8"))

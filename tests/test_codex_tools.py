@@ -24,7 +24,7 @@ from opencode_go_proxy.protocol import (
     responses_tools_to_chat_tools,
 )
 
-SESSION_MODEL = "opencode-go/deepseek-v4-flash"
+SESSION_MODEL = "opencode-go/deepseek-v4.1-flash"
 
 FAKE_PROMPT_INPUT = {
     "tools": [
@@ -127,7 +127,7 @@ def mock_chat_response(content: str = "hello") -> dict:
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-v4.1-flash",
         "choices": [
             {
                 "index": 0,
@@ -417,7 +417,7 @@ class TestWebSearchPreview:
 class TestCompact:
     def test_compact_payload_round_trips_through_normal_translation(self) -> None:
         payload = {
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4.1-flash",
             "input": [
                 {
                     "type": "message",
@@ -437,7 +437,7 @@ class TestCompact:
         assert "Previous conversation summary" in chat["messages"][0]["content"]
         assert "tools" not in chat
 
-        response = chat_completion_to_response(mock_chat_response("summary answer"), request_model="deepseek-v4-flash")
+        response = chat_completion_to_response(mock_chat_response("summary answer"), request_model="deepseek-v4.1-flash")
         assert response["status"] == "completed"
         assert response["object"] == "response"
         assert response["output"][0]["type"] == "message"
@@ -453,7 +453,7 @@ class TestCompact:
             conn.request(
                 "POST",
                 "/v1/responses?compact=true",
-                json.dumps({"model": "deepseek-v4-flash", "input": "continue"}),
+                json.dumps({"model": "deepseek-v4.1-flash", "input": "continue"}),
                 {"Content-Type": "application/json"},
             )
             resp = conn.getresponse()

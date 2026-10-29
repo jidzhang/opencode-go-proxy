@@ -86,7 +86,7 @@ def server():
 
 def chat_body(stream: bool = False) -> bytes:
     return json.dumps({
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-v4.1-flash",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": stream,
     }).encode("utf-8")
@@ -122,7 +122,7 @@ class TestChatCompletionsPassthrough:
         upstream_body = json.dumps({
             "id": "chatcmpl-1",
             "object": "chat.completion",
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4.1-flash",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
         }).encode("utf-8")
@@ -498,9 +498,9 @@ class TestPassthroughMetering:
 
             handler = mock.Mock(wfile=mock.Mock())
             handler.headers = {}
-            handle_chat_completions_request(handler, {"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}]}, make_config(8790), "req")
+            handle_chat_completions_request(handler, {"model": "deepseek-v4.1-flash", "messages": [{"role": "user", "content": "hi"}]}, make_config(8790), "req")
             with open(usage_events_path()) as fh:
                 events = [json.loads(line) for line in fh if line.strip()]
         assert events, "passthrough must be metered"
         assert events[-1]["status"] == 200
-        assert events[-1]["model"] == "deepseek-v4-flash"
+        assert events[-1]["model"] == "deepseek-v4.1-flash"

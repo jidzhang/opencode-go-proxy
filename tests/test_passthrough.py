@@ -439,7 +439,7 @@ def test_proxy_opencode_go_model_still_translates(native_upstream) -> None:
         {
             "id": "cmpl-x",
             "object": "chat.completion",
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4.1-flash",
             "choices": [
                 {
                     "index": 0,
@@ -472,7 +472,7 @@ def test_proxy_opencode_go_model_still_translates(native_upstream) -> None:
             conn.request(
                 "POST",
                 "/v1/responses",
-                json.dumps({"model": "opencode-go/deepseek-v4-flash", "input": "hi"}).encode(),
+                json.dumps({"model": "opencode-go/deepseek-v4.1-flash", "input": "hi"}).encode(),
                 {"content-type": "application/json"},
             )
             resp = conn.getresponse()

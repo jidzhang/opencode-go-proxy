@@ -98,12 +98,12 @@ class RequestBodyDecodeTests(unittest.TestCase):
         self.assertEqual(decode_request_body(body, "identity", 10 * 1024 * 1024), body)
 
     def test_zstd_body_is_decompressed(self) -> None:
-        raw = b'{"model": "deepseek-v4-flash", "input": "hi"}'
+        raw = b'{"model": "deepseek-v4.1-flash", "input": "hi"}'
         compressed = zstandard.ZstdCompressor().compress(raw)
         self.assertEqual(decode_request_body(compressed, "zstd", 10 * 1024 * 1024), raw)
 
     def test_gzip_body_is_decompressed(self) -> None:
-        raw = b'{"model": "deepseek-v4-flash"}'
+        raw = b'{"model": "deepseek-v4.1-flash"}'
         self.assertEqual(decode_request_body(gzip.compress(raw), "gzip", 10 * 1024 * 1024), raw)
 
     def test_bad_zstd_body_raises_400(self) -> None:

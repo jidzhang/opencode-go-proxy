@@ -108,7 +108,7 @@ class _RecordingBackend(BaseHTTPRequestHandler):
                 model = json.loads(record["body"]).get("model", "")
             except (ValueError, TypeError):
                 model = ""
-            if model == "deepseek-v4-flash-free":
+            if model == "deepseek-v4.1-flash-free":
                 self._emit(429, "application/json", json.dumps(ZEN_ERROR_BODY).encode())
                 return
             self._emit(200, "application/json", json.dumps(_chat_completion(ZEN_TEXT)).encode())
@@ -271,7 +271,7 @@ def test_go_route_never_touches_native_backend(backend: str, proxy_server: int, 
     """(b) opencode-go/ always translates through the go upstream; the native
     backend must not see the request, and the client auth must not leak
     upstream (the proxy substitutes its own key)."""
-    resp = _post(proxy_server, {"model": "opencode-go/deepseek-v4-flash", "input": "hi"}, auth=CLIENT_AUTH)
+    resp = _post(proxy_server, {"model": "opencode-go/deepseek-v4.1-flash", "input": "hi"}, auth=CLIENT_AUTH)
 
     assert resp.status == 200
     body = json.loads(resp.raw)
@@ -289,9 +289,9 @@ def test_go_route_never_touches_native_backend(backend: str, proxy_server: int, 
 def test_zen_free_model_relays_upstream_error_envelope(backend: str, proxy_server: int, offline_env) -> None:
     """(c) zen/ always goes to the zen upstream; an upstream error is relayed
     with the zen error type, never replaced by the native backend's body."""
-    _seed_zen_capture("deepseek-v4-flash-free")
+    _seed_zen_capture("deepseek-v4.1-flash-free")
     resp = _post(
-        proxy_server, {"model": "zen/deepseek-v4-flash-free", "input": "hi"}, auth=CLIENT_AUTH
+        proxy_server, {"model": "zen/deepseek-v4.1-flash-free", "input": "hi"}, auth=CLIENT_AUTH
     )
 
     assert resp.status == 429
@@ -303,15 +303,15 @@ def test_zen_free_model_relays_upstream_error_envelope(backend: str, proxy_serve
     assert native == [] and go == []
     assert len(zen) == 1
     assert zen[0]["path"] == f"{ZEN_BASE_PATH}/chat/completions"
-    assert json.loads(zen[0]["body"])["model"] == "deepseek-v4-flash-free"
+    assert json.loads(zen[0]["body"])["model"] == "deepseek-v4.1-flash-free"
     assert _auth_values(zen[0]) == [f"Bearer {GO_FAKE_KEY}"]
 
 
 def test_zen_route_translates_success(backend: str, proxy_server: int, offline_env) -> None:
     """A zen model on a working upstream round-trips to a Responses object
     without ever touching the native backend."""
-    _seed_zen_capture("deepseek-v4-flash")
-    resp = _post(proxy_server, {"model": "zen/deepseek-v4-flash", "input": "hi"})
+    _seed_zen_capture("deepseek-v4.1-flash")
+    resp = _post(proxy_server, {"model": "zen/deepseek-v4.1-flash", "input": "hi"})
 
     assert resp.status == 200
     body = json.loads(resp.raw)
@@ -321,18 +321,18 @@ def test_zen_route_translates_success(backend: str, proxy_server: int, offline_e
     native, go, zen = _partition_captured()
     assert native == [] and go == []
     assert len(zen) == 1
-    assert json.loads(zen[0]["body"])["model"] == "deepseek-v4-flash"
+    assert json.loads(zen[0]["body"])["model"] == "deepseek-v4.1-flash"
 
 
 def test_concurrent_requests_do_not_cross_contaminate(backend: str, proxy_server: int, offline_env) -> None:
     """(d) native + go + zen fired at the same time each get their own result
     and the native backend log shows exactly the native request."""
     _seed_native_capture("gpt-5.6-terra")
-    _seed_zen_capture("deepseek-v4-flash-free")
+    _seed_zen_capture("deepseek-v4.1-flash-free")
     payloads = [
         {"model": "gpt-5.6-terra", "input": "hi", "stream": False},
-        {"model": "opencode-go/deepseek-v4-flash", "input": "hi"},
-        {"model": "zen/deepseek-v4-flash-free", "input": "hi"},
+        {"model": "opencode-go/deepseek-v4.1-flash", "input": "hi"},
+        {"model": "zen/deepseek-v4.1-flash-free", "input": "hi"},
     ]
     results: list[SimpleNamespace | None] = [None] * len(payloads)
     failures: list[Exception] = []
@@ -362,8 +362,8 @@ def test_concurrent_requests_do_not_cross_contaminate(backend: str, proxy_server
     native, go, zen = _partition_captured()
     assert len(native) == 1 and len(go) == 1 and len(zen) == 1
     assert json.loads(native[0]["body"])["model"] == "gpt-5.6-terra"
-    assert json.loads(go[0]["body"])["model"] == "deepseek-v4-flash"
-    assert json.loads(zen[0]["body"])["model"] == "deepseek-v4-flash-free"
+    assert json.loads(go[0]["body"])["model"] == "deepseek-v4.1-flash"
+    assert json.loads(zen[0]["body"])["model"] == "deepseek-v4.1-flash-free"
 
 
 def test_models_list_serves_each_provider_without_collision(backend: str, proxy_server: int, offline_env) -> None:
@@ -372,7 +372,7 @@ def test_models_list_serves_each_provider_without_collision(backend: str, proxy_
     from opencode_go_proxy import catalog as proxy_catalog
 
     _seed_native_capture("gpt-5.6-terra")
-    _seed_zen_capture("deepseek-v4-flash")
+    _seed_zen_capture("deepseek-v4.1-flash")
     proxy_catalog.render_merged_catalog()
 
     resp = _get(proxy_server, "/v1/models")
@@ -380,11 +380,11 @@ def test_models_list_serves_each_provider_without_collision(backend: str, proxy_
     ids = [entry["id"] for entry in json.loads(resp.raw)["data"]]
 
     assert "gpt-5.6-terra" in ids          # native, bare
-    assert "opencode-go/deepseek-v4-flash" in ids
-    assert "zen/deepseek-v4-flash" in ids  # zen, prefixed
-    assert ids.count("opencode-go/deepseek-v4-flash") == 1
-    assert ids.count("zen/deepseek-v4-flash") == 1
-    assert ids.count("zen/deepseek-v4-flash") == 1
+    assert "opencode-go/deepseek-v4.1-flash" in ids
+    assert "zen/deepseek-v4.1-flash" in ids  # zen, prefixed
+    assert ids.count("opencode-go/deepseek-v4.1-flash") == 1
+    assert ids.count("zen/deepseek-v4.1-flash") == 1
+    assert ids.count("zen/deepseek-v4.1-flash") == 1
     assert len(ids) == len(set(ids))
 
 
@@ -419,7 +419,7 @@ def _live_proxy(backend: str) -> tuple[int, ThreadingHTTPServer]:
 
 @live_only
 def test_live_go_route_hits_real_upstream_not_mock(backend: str) -> None:
-    """(b live) opencode-go/deepseek-v4-flash goes to the real opencode.ai go
+    """(b live) opencode-go/deepseek-v4.1-flash goes to the real opencode.ai go
     upstream with the keychain key; the native mock sees nothing and the
     response is a real upstream verdict (200 or an upstream 4xx), never
     MOCK_NATIVE."""
@@ -435,7 +435,7 @@ def test_live_go_route_hits_real_upstream_not_mock(backend: str) -> None:
         ):
             resp = _post(
                 port,
-                {"model": "opencode-go/deepseek-v4-flash", "input": "hi"},
+                {"model": "opencode-go/deepseek-v4.1-flash", "input": "hi"},
                 auth=CLIENT_AUTH,
             )
     finally:
@@ -455,7 +455,7 @@ def test_live_go_route_hits_real_upstream_not_mock(backend: str) -> None:
 
 @live_only
 def test_live_zen_route_hits_real_upstream_not_mock(backend: str) -> None:
-    """(c live) zen/deepseek-v4-flash-free goes to the real zen upstream; a
+    """(c live) zen/deepseek-v4.1-flash-free goes to the real zen upstream; a
     free-tier 429 with the zen error envelope is a valid zen response, and the
     native mock sees nothing."""
     port, httpd = _live_proxy(backend)
@@ -470,7 +470,7 @@ def test_live_zen_route_hits_real_upstream_not_mock(backend: str) -> None:
         ):
             resp = _post(
                 port,
-                {"model": "zen/deepseek-v4-flash-free", "input": "hi"},
+                {"model": "zen/deepseek-v4.1-flash-free", "input": "hi"},
                 auth=CLIENT_AUTH,
             )
     finally:

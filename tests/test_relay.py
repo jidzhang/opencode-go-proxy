@@ -11,7 +11,7 @@ from opencode_go_proxy.protocol import (
     responses_payload_to_chat_payload,
 )
 
-SESSION_MODEL = "opencode-go/deepseek-v4-flash"
+SESSION_MODEL = "opencode-go/deepseek-v4.1-flash"
 
 
 def thread_call(
