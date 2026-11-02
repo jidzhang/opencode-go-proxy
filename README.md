@@ -623,6 +623,38 @@ The proxy accepts both `/responses` and `/v1/responses`.
 
 The upstream base URL resolves in this order: the `--chat-base-url` flag, then `OPENCODE_GO_BASE_URL`, then `OPENCODE_ZEN_BASE_URL`, then the legacy `CHAT_COMPLETIONS_BASE_URL`, then the built-in default.
 
+### Windows helper scripts
+
+The repo-root `.bat` scripts run the proxy on port 19999. Machine-local
+values live in `proxy-local.bat`, which is gitignored - start from the
+tracked template:
+
+```bat
+copy proxy-local.example.bat proxy-local.bat
+```
+
+| Script | Purpose |
+|--------|---------|
+| `start-proxy-19999.bat` | Foreground manual run (`uv run`, prompts for missing credentials) |
+| `restart-proxy-19999.bat` | Stop whatever holds 19999, start one fresh manual instance, wait for `/health` |
+| `install-service.bat` | Install/rebuild the NSSM service (Administrator, `OPENCODE_GO_API_KEY` and `OPENCODE_GO_PROXY_CALLER_TOKEN` set) |
+| `restart-service.bat` / `stop-service.bat` / `remove-service.bat` | Service lifecycle |
+
+Defaults work on one machine with no `proxy-local.bat`: the server binds
+`127.0.0.1:19999` and connects to the API directly. Two values in
+`proxy-local.bat` are commonly edited:
+
+- `OPENCODE_GO_PROXY_BIND` - set to `0.0.0.0` to share the proxy with other
+  devices on the LAN. Remote mode and caller-token auth are then enabled
+  automatically (the scripts never set them separately), so every LAN client
+  must send the caller token (see [Remote access](#remote-access)). Reinstall
+  the service after changing it.
+- `OPENCODE_GO_PROXY_UPSTREAM` - an HTTP proxy for egress to the API, e.g.
+  `http://127.0.0.1:7890`. Leave empty to connect directly.
+
+`OPENCODE_GO_PROXY_LAN_IP` is optional; it only prints the LAN URL in the
+startup banner when the bind is non-loopback.
+
 ### Remote access
 
 Keep the proxy on loopback whenever possible. A non-loopback bind fails closed
