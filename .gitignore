@@ -12,7 +12,8 @@ tmp/
 caller-token.txt
 *-token.txt
 *.key
-# Machine-local values for the .bat scripts (LAN IP, upstream proxy).
+# Machine-local values for the .bat scripts (bind, LAN IP, upstream proxy).
+# Copy proxy-local.example.bat to proxy-local.bat and edit the copy.
 proxy-local.bat
 
 # Machine-local tool runtime state.
