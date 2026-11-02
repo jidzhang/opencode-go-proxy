@@ -5,13 +5,32 @@ rem ============================================================
 rem  Install opencode-go-proxy as a Windows service via NSSM.
 rem  Run as Administrator in a shell that has OPENCODE_GO_API_KEY
 rem  and OPENCODE_GO_PROXY_CALLER_TOKEN set, e.g. via setx.
-rem  Serves 0.0.0.0:19999. Optional egress proxy: OPENCODE_GO_PROXY_UPSTREAM.
-rem  Machine-local values come from proxy-local.bat (gitignored).
+rem  Serves 127.0.0.1:19999 by default. For LAN sharing set
+rem  OPENCODE_GO_PROXY_BIND=0.0.0.0 in proxy-local.bat - remote mode and
+rem  caller-token auth are then enabled automatically.
+rem  Machine-local values come from proxy-local.bat (gitignored); its
+rem  template is proxy-local.example.bat.
 rem ============================================================
 
 cd /d "%~dp0"
 
-if exist "%~dp0proxy-local.bat" call "%~dp0proxy-local.bat"
+if exist "%~dp0proxy-local.bat" (
+    call "%~dp0proxy-local.bat"
+) else (
+    echo [note] proxy-local.bat not found. Using defaults: bind 127.0.0.1,
+    echo        no egress proxy. For LAN sharing or an upstream proxy:
+    echo            copy proxy-local.example.bat proxy-local.bat
+    echo        then edit it and rerun this script.
+    echo.
+)
+
+rem --- listen address: loopback by default, LAN only on explicit opt-in ---
+set "BIND=%OPENCODE_GO_PROXY_BIND%"
+if not defined BIND set "BIND=127.0.0.1"
+rem Remote mode is derived from the bind, never configured separately:
+rem any non-loopback address turns the remote guard on.
+set "ALLOW_REMOTE=0"
+if /i not "%BIND%"=="127.0.0.1" if /i not "%BIND%"=="localhost" if not "%BIND%"=="::1" set "ALLOW_REMOTE=1"
 
 set SVC=opencode-go-proxy
 set NSSM=nssm.exe
@@ -71,7 +90,7 @@ echo       done.
 echo.
 
 echo [3/8] Installing service ...
-"%NSSM%" install %SVC% "%EXE%" --bind 0.0.0.0 --port 19999
+"%NSSM%" install %SVC% "%EXE%" --bind %BIND% --port 19999
 if errorlevel 1 (
     echo [ERROR] Install failed. Are you running as Administrator?
     exit /b 1
@@ -105,15 +124,20 @@ echo [5/8] Configuring environment ...
 rem Egress proxy is optional: set OPENCODE_GO_PROXY_UPSTREAM (e.g. in
 rem proxy-local.bat) to route API calls through a local HTTP proxy;
 rem leave it unset to connect directly.
+rem LAN_NO_PROXY names this machine's own LAN IP so the egress proxy is
+rem bypassed for callbacks to ourselves; only meaningful when shared.
 set "UPSTREAM=%OPENCODE_GO_PROXY_UPSTREAM%"
 set "DESKTOP_IP=%OPENCODE_GO_PROXY_LAN_IP%"
+if "%ALLOW_REMOTE%"=="0" set "DESKTOP_IP="
 set "LAN_NO_PROXY="
 if defined DESKTOP_IP set "LAN_NO_PROXY=,%DESKTOP_IP%"
 set "ENV_EXTRA="OPENCODE_GO_API_KEY=%OPENCODE_GO_API_KEY%""
 set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_CALLER_TOKEN=%OPENCODE_GO_PROXY_CALLER_TOKEN%""
-set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_ALLOW_REMOTE=1""
-set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_BIND=0.0.0.0""
+set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_BIND=%BIND%""
 set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_PORT=19999""
+rem Only a shared (non-loopback) instance opts into remote mode; a loopback
+rem bind never starts with the remote guard disabled explicitly.
+if "%ALLOW_REMOTE%"=="1" set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_ALLOW_REMOTE=1""
 if defined UPSTREAM (
   set "ENV_EXTRA=%ENV_EXTRA% "HTTP_PROXY=%UPSTREAM%""
   set "ENV_EXTRA=%ENV_EXTRA% "HTTPS_PROXY=%UPSTREAM%""
@@ -165,10 +189,18 @@ echo.
 echo ============================================
 echo   Install complete.
 echo   Health: http://127.0.0.1:19999/health is 200.
-if defined DESKTOP_IP (
-    echo   LAN URL for laptops: http://%DESKTOP_IP%:19999/v1
+echo   Listen address: %BIND%
+if "%ALLOW_REMOTE%"=="1" (
+    if defined DESKTOP_IP (
+        echo   LAN URL for laptops: http://%DESKTOP_IP%:19999/v1
+    ) else (
+        echo   LAN URL: http://^<this-machine-LAN-IP^>:19999/v1
+        echo            set OPENCODE_GO_PROXY_LAN_IP in proxy-local.bat to print it here.
+    )
+    echo   Remote clients must present OPENCODE_GO_PROXY_CALLER_TOKEN.
 ) else (
-    echo   LAN URL: set OPENCODE_GO_PROXY_LAN_IP in proxy-local.bat and reinstall.
+    echo   Local only. For LAN sharing set OPENCODE_GO_PROXY_BIND=0.0.0.0 in
+    echo   proxy-local.bat and rerun this script.
 )
 echo   Logs: logs\service.out.log and service.err.log
 echo   Keep start-proxy-19999.bat stopped while the service holds port 19999.

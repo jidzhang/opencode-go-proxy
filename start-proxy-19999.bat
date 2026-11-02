@@ -1,17 +1,35 @@
 @echo off
 setlocal
-REM Manual run: serves on 0.0.0.0:19999 for LAN share.
-REM Machine-local values (LAN IP, upstream proxy) come from proxy-local.bat
-REM (gitignored) or the OPENCODE_GO_PROXY_LAN_IP / OPENCODE_GO_PROXY_UPSTREAM
-REM env vars. Egress goes through the upstream only when one is set;
-REM otherwise the proxy connects to the API directly.
+REM Manual run: serves 127.0.0.1:19999 by default. For LAN sharing set
+REM OPENCODE_GO_PROXY_BIND=0.0.0.0 in proxy-local.bat - remote mode and
+REM caller-token auth are then enabled automatically.
+REM Machine-local values (bind, LAN IP, upstream proxy) come from
+REM proxy-local.bat (gitignored; template: proxy-local.example.bat) or the
+REM OPENCODE_GO_PROXY_BIND / OPENCODE_GO_PROXY_LAN_IP /
+REM OPENCODE_GO_PROXY_UPSTREAM env vars.
+REM Egress goes through the upstream only when one is set; otherwise the
+REM proxy connects to the API directly.
 REM NO_PROXY below applies to this proxy process only. Codex runs in its own shell
 REM and needs its own NO_PROXY if a system proxy is set.
 
-if exist "%~dp0proxy-local.bat" call "%~dp0proxy-local.bat"
+if exist "%~dp0proxy-local.bat" (
+  call "%~dp0proxy-local.bat"
+) else (
+  echo [note] proxy-local.bat not found; using defaults: bind 127.0.0.1, no upstream.
+  echo        For LAN sharing or an upstream proxy, copy proxy-local.example.bat
+  echo        to proxy-local.bat and edit it.
+  echo.
+)
 
 set PROXY_PORT=19999
+REM Listen address: loopback by default, LAN only on explicit opt-in.
+set "BIND=%OPENCODE_GO_PROXY_BIND%"
+if not defined BIND set "BIND=127.0.0.1"
+REM Remote mode is derived from the bind, never configured separately.
+set "ALLOW_REMOTE=0"
+if /i not "%BIND%"=="127.0.0.1" if /i not "%BIND%"=="localhost" if not "%BIND%"=="::1" set "ALLOW_REMOTE=1"
 set "DESKTOP_IP=%OPENCODE_GO_PROXY_LAN_IP%"
+if "%ALLOW_REMOTE%"=="0" set "DESKTOP_IP="
 set "UPSTREAM_PROXY=%OPENCODE_GO_PROXY_UPSTREAM%"
 
 set "LAN_NO_PROXY="
@@ -25,8 +43,13 @@ if defined UPSTREAM_PROXY (
   set "no_proxy=%NO_PROXY%"
 )
 
-set OPENCODE_GO_PROXY_ALLOW_REMOTE=1
-set OPENCODE_GO_PROXY_BIND=0.0.0.0
+REM Remote mode follows the bind: only a non-loopback bind opts in.
+if "%ALLOW_REMOTE%"=="1" (
+  set OPENCODE_GO_PROXY_ALLOW_REMOTE=1
+) else (
+  set OPENCODE_GO_PROXY_ALLOW_REMOTE=
+)
+set OPENCODE_GO_PROXY_BIND=%BIND%
 set OPENCODE_GO_PROXY_PORT=%PROXY_PORT%
 REM ---- Log verbosity switch: warn | info (current) | debug ----------------
 REM warn  = quiet: only retries/failures/degradation reach logs\proxy-19999.log
@@ -51,21 +74,26 @@ if not defined OPENCODE_GO_PROXY_CALLER_TOKEN (
 )
 
 echo.
-echo [proxy] bind=0.0.0.0 port=%PROXY_PORT%
+echo [proxy] bind=%BIND% port=%PROXY_PORT%
 if defined UPSTREAM_PROXY echo [proxy] upstream via %UPSTREAM_PROXY%, NO_PROXY=%NO_PROXY%
-if defined DESKTOP_IP (
-  echo [proxy] LAN URL for laptops: http://%DESKTOP_IP%:%PROXY_PORT%/v1
+if "%ALLOW_REMOTE%"=="1" (
+  if defined DESKTOP_IP (
+    echo [proxy] LAN URL for laptops: http://%DESKTOP_IP%:%PROXY_PORT%/v1
+  ) else (
+    echo [proxy] LAN URL: http://^<this-machine-LAN-IP^>:%PROXY_PORT%/v1
+    echo [proxy]   set OPENCODE_GO_PROXY_LAN_IP in proxy-local.bat to print it.
+  )
+  echo [proxy] laptops must set same CALLER_TOKEN as env OPENCODE_GO_PROXY_CALLER_TOKEN
 ) else (
-  echo [proxy] LAN URL: set OPENCODE_GO_PROXY_LAN_IP in proxy-local.bat to advertise one.
+  echo [proxy] local only - LAN sharing needs OPENCODE_GO_PROXY_BIND=0.0.0.0 in proxy-local.bat
 )
-echo [proxy] laptops must set same CALLER_TOKEN as env OPENCODE_GO_PROXY_CALLER_TOKEN
 echo.
 
 cd /d "%~dp0"
 if not exist "%~dp0logs" mkdir "%~dp0logs" 2>nul
 REM --frozen keeps uv from rewriting uv.lock on every start.
 REM stderr trace stream appends to logs\proxy-19999.log (machine-local, gitignored).
-uv run --frozen opencode-go-proxy --bind 0.0.0.0 --port %PROXY_PORT% >> "%~dp0logs\proxy-19999.log" 2>&1
+uv run --frozen opencode-go-proxy --bind %BIND% --port %PROXY_PORT% >> "%~dp0logs\proxy-19999.log" 2>&1
 set EXITCODE=%ERRORLEVEL%
 echo.
 echo [proxy] exited with code %EXITCODE%
