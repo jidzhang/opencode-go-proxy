@@ -156,10 +156,10 @@ def _call_zen_responses(payload, config, request_id):
     """Test stand-in for the deleted non-stream zen wrapper: resolve the bare
     id and wire family and key exactly as the live dispatcher does."""
     model = payload["model"]
-    from opencode_go_proxy.secrets import resolve_api_key
     from opencode_go_proxy.zen_upstream import (
         bare_zen_id,
         call_family_responses,
+        resolve_api_key,
         zen_base_url,
         zen_family_for,
     )
@@ -167,6 +167,10 @@ def _call_zen_responses(payload, config, request_id):
     return call_family_responses(
         payload, config, request_id,
         model=model, bare_id=bare, family=zen_family_for(bare),
+        # Resolve through the zen_upstream module attribute so tests that
+        # monkeypatch it (_fake_key) are honored: importing the function from
+        # secrets directly bypasses the patch and made these tests depend on
+        # ambient credentials in the environment.
         api_key=resolve_api_key(config, request_id), base_url=zen_base_url(),
         provider="zen",
     )
