@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tempfile
@@ -520,6 +521,118 @@ class CatalogCacheCoalescingTests(unittest.TestCase):
             # Same path and mtime: the cache must not serve the forced re-read.
             self.assertEqual(protocol.reload_known_models(), {"alpha"})
         self.assertEqual(calls["count"], 2)
+
+
+class TextIsNotAnImageTests(unittest.TestCase):
+    """A bare URL string is text; only a typed part declares an image.
+
+    A tool printing a URL as its whole result used to be promoted to an
+    ``image_url`` part, so the upstream downloaded the page and rejected the
+    turn with ``UnsupportedImageFormat`` (400).
+    """
+
+    TOOL_URL = "https://api.github.com/repos/o/r/releases/assets/1"
+
+    def _messages(self, output: object) -> list:
+        chat, _model, _stats = responses_payload_to_chat_payload(
+            {
+                "model": "deepseek-v4.1-flash",
+                "input": [
+                    {"type": "message", "role": "user", "content": "list the assets"},
+                    {"type": "function_call", "call_id": "c1", "name": "Bash", "arguments": "{}"},
+                    {"type": "function_call_output", "call_id": "c1", "output": output},
+                ],
+            }
+        )
+        return chat["messages"]
+
+    def test_tool_output_that_is_a_url_stays_text(self) -> None:
+        messages = self._messages(self.TOOL_URL)
+        self.assertEqual(messages[-1]["content"], self.TOOL_URL)
+
+    def test_user_message_that_is_a_url_stays_text(self) -> None:
+        chat, _model, _stats = responses_payload_to_chat_payload(
+            {"model": "deepseek-v4.1-flash", "input": [{"role": "user", "content": self.TOOL_URL}]}
+        )
+        self.assertEqual(chat["messages"][-1]["content"], self.TOOL_URL)
+
+    def test_explicit_typed_image_part_is_still_an_image(self) -> None:
+        chat, _model, _stats = responses_payload_to_chat_payload(
+            {
+                "model": "deepseek-v4.1-flash",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "what is this"},
+                            {"type": "input_image", "image_url": self.TOOL_URL},
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(
+            chat["messages"][-1]["content"],
+            [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_url", "image_url": {"url": self.TOOL_URL}},
+            ],
+        )
+
+    def test_inline_data_image_string_is_an_image(self) -> None:
+        data_url = "data:image/png;base64,iVBORw0KGgo="
+        chat, _model, _stats = responses_payload_to_chat_payload(
+            {"model": "deepseek-v4.1-flash", "input": [{"role": "user", "content": data_url}]}
+        )
+        self.assertEqual(
+            chat["messages"][-1]["content"],
+            [{"type": "image_url", "image_url": {"url": data_url}}],
+        )
+
+
+class ImageMimeTests(unittest.TestCase):
+    """The upstream whitelists image mimes and 400s the rest, so relabel from bytes.
+
+    Measured live: png/jpeg/gif/webp pass; bmp, tiff, avif, svg+xml and
+    application/pdf fail even when the bytes really are an image. A client
+    labelling PNG bytes ``application/pdf`` (MCP tools do this) must still get
+    its image through, and a genuinely unsupported blob must be dropped here
+    rather than costing the whole turn upstream.
+    """
+
+    PNG = base64.b64encode(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d494844520000000100000001080200000090"
+            "7753de0000000c4944415408d763f8cf000000ffff030001fe0200fe"
+        )
+    ).decode()
+
+    def _url(self, part: dict) -> str | None:
+        normalized = protocol._normalize_image_url(part)
+        return None if normalized is None else normalized["image_url"]["url"]
+
+    def test_whitelisted_mime_passes_through(self) -> None:
+        url = self._url({"type": "image", "data": self.PNG, "mimeType": "image/png"})
+        self.assertTrue(url.startswith("data:image/png;base64,"))
+
+    def test_unsupported_label_is_relabelled_from_magic_bytes(self) -> None:
+        for mime in ("application/pdf", "text/plain", "image/bmp", "image/svg+xml", "image/x-icon"):
+            with self.subTest(mime=mime):
+                url = self._url({"type": "image", "data": self.PNG, "mimeType": mime})
+                self.assertTrue(url.startswith("data:image/png;base64,"), url)
+
+    def test_non_image_bytes_with_bad_label_are_dropped(self) -> None:
+        part = {"type": "image", "data": base64.b64encode(b"%PDF-1.4 not an image").decode(), "mimeType": "application/pdf"}
+        self.assertIsNone(self._url(part))
+
+    def test_data_url_with_unsupported_mime_is_relabelled(self) -> None:
+        part = {"type": "input_image", "image_url": f"data:image/bmp;base64,{self.PNG}"}
+        self.assertTrue(self._url(part).startswith("data:image/png;base64,"))
+        nested = {"type": "input_image", "image_url": {"url": f"data:image/bmp;base64,{self.PNG}"}}
+        self.assertTrue(self._url(nested).startswith("data:image/png;base64,"))
+
+    def test_https_image_source_is_left_alone(self) -> None:
+        self.assertEqual(self._url({"type": "input_image", "image_url": "https://x/y.png"}), "https://x/y.png")
 
 
 class ImageRoutingTests(unittest.TestCase):
