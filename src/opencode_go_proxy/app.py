@@ -234,12 +234,20 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         stop as soon as no more data is instantly available. Bytes already
         buffered in ``rfile`` are already off the kernel buffer and cannot
         trigger the RST, so reading the socket directly is sufficient.
+
+        A rejected or unparsable content-length declares no usable remainder
+        (``-5`` and ``abc`` both reach an error response with a real body
+        still queued), so those fall back to draining whatever is available
+        up to the cap instead of assuming zero bytes are waiting.
         """
         try:
             declared = int(self.headers.get("content-length", "0"))
         except ValueError:
-            return
-        remaining = min(max(declared - self._body_bytes_read, 0), _ERROR_BODY_DRAIN_CAP)
+            declared = -1
+        if declared < 0:
+            remaining = _ERROR_BODY_DRAIN_CAP
+        else:
+            remaining = min(max(declared - self._body_bytes_read, 0), _ERROR_BODY_DRAIN_CAP)
         try:
             while remaining > 0:
                 if not select.select([self.request], [], [], _ERROR_BODY_DRAIN_WAIT_SEC)[0]:
