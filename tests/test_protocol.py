@@ -609,7 +609,7 @@ class ImageMimeTests(unittest.TestCase):
 
     def _url(self, part: dict) -> str | None:
         normalized = protocol._normalize_image_url(part)
-        return None if normalized is None else normalized["image_url"]["url"]
+        return normalized["image_url"]["url"] if normalized else None
 
     def test_whitelisted_mime_passes_through(self) -> None:
         url = self._url({"type": "image", "data": self.PNG, "mimeType": "image/png"})
@@ -633,6 +633,72 @@ class ImageMimeTests(unittest.TestCase):
 
     def test_https_image_source_is_left_alone(self) -> None:
         self.assertEqual(self._url({"type": "input_image", "image_url": "https://x/y.png"}), "https://x/y.png")
+
+    def test_canonical_base64_data_url_passes_through_verbatim(self) -> None:
+        url = f"data:image/png;base64,{self.PNG}"
+        self.assertEqual(self._url({"type": "input_image", "image_url": url}), url)
+
+    def test_percent_encoded_data_url_is_not_given_a_base64_marker(self) -> None:
+        url = "data:image/png,%89PNG%0D%0A%1A%0A"
+        self.assertEqual(self._url({"type": "input_image", "image_url": url}), url)
+
+    def test_non_base64_non_image_data_url_is_dropped(self) -> None:
+        # A percent-encoded URL with no usable image label: dropped instead of
+        # being forwarded toward a certain UnsupportedImageFormat 400.
+        self.assertIsNone(self._url({"type": "input_image", "image_url": "data:text/html,%3Cb%3Ex%3C%2Fb%3E"}))
+        self.assertIsNone(self._url({"type": "input_image", "image_url": "data:,hello"}))
+
+    def test_mime_less_base64_data_url_defaults_to_png_label(self) -> None:
+        url = self._url({"type": "input_image", "image_url": f"data:;base64,{self.PNG}"})
+        self.assertTrue(url.startswith("data:image/png;base64,"), url)
+
+    def test_aliased_mime_in_a_data_url_is_still_canonicalized(self) -> None:
+        url = self._url({"type": "input_image", "image_url": f"data:image/jpg;base64,{self.PNG}"})
+        self.assertTrue(url.startswith("data:image/jpeg;base64,"), url)
+
+    def test_non_image_labeled_data_url_is_relabelled_from_bytes(self) -> None:
+        # The scheme guard admits any data: URL; the bytes decide usability,
+        # so a screenshot labeled application/pdf works like the MCP path.
+        url = self._url({"type": "input_image", "image_url": f"data:application/pdf;base64,{self.PNG}"})
+        self.assertTrue(url.startswith("data:image/png;base64,"), url)
+
+    def test_non_string_image_url_or_mime_is_dropped_not_a_crash(self) -> None:
+        self.assertIsNone(self._url({"type": "input_image", "image_url": {"url": 123}}))
+        self.assertIsNone(self._url({"type": "image", "data": self.PNG, "mimeType": 123}))
+
+    def _user_content(self, content: object) -> object:
+        """The last message's content after translating a single-user-turn payload."""
+        chat, _model, _stats = responses_payload_to_chat_payload(
+            {"model": "deepseek-v4.1-flash", "input": [{"role": "user", "content": content}]}
+        )
+        return chat["messages"][-1]["content"]
+
+    def test_bare_data_url_string_is_relabelled_like_typed_parts(self) -> None:
+        data_url = f"data:image/bmp;base64,{self.PNG}"
+        self.assertEqual(
+            self._user_content(data_url),
+            [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{self.PNG}"}}],
+        )
+
+    def test_bare_data_url_string_inside_a_list_is_relabelled(self) -> None:
+        data_url = f"data:image/bmp;base64,{self.PNG}"
+        self.assertEqual(
+            self._user_content(["look at this", data_url]),
+            [
+                {"type": "text", "text": "look at this"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{self.PNG}"}},
+            ],
+        )
+
+    def test_bare_unusable_data_url_string_stays_text(self) -> None:
+        junk = base64.b64encode(b"%PDF-1.4 not an image").decode()
+        data_url = f"data:image/bmp;base64,{junk}"
+        self.assertEqual(self._user_content(data_url), data_url)
+
+    def test_message_with_only_dropped_images_yields_empty_text(self) -> None:
+        junk = base64.b64encode(b"%PDF-1.4 not an image").decode()
+        content = [{"type": "input_image", "image_url": f"data:image/bmp;base64,{junk}"}]
+        self.assertEqual(self._user_content(content), "")
 
 
 class ImageRoutingTests(unittest.TestCase):

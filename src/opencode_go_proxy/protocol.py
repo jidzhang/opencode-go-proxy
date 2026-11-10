@@ -262,18 +262,26 @@ def new_response_id() -> str:
     return f"resp_{uuid.uuid4().hex}"
 
 
-_ALLOWED_IMAGE_SCHEMES = ("data:image/", "https://")
+_ALLOWED_IMAGE_SCHEMES = ("data:", "https://")
 
 
 def _is_safe_image_url(url: str) -> bool:
-    """Reject non-http(s)/data URLs to prevent SSRF (file://, http://localhost, cloud metadata, etc)."""
+    """Reject non-fetchable-scheme URLs to prevent SSRF (file://, http://localhost, cloud metadata, etc).
+
+    Any ``data:`` URL passes: the proxy never fetches one (it rides inline in
+    the outbound payload), and the mime rewrite below decides usability from
+    the magic bytes. Gating on the ``image/`` label here would drop exactly
+    the mislabeled images the sniff exists to save.
+    """
     return url.startswith(_ALLOWED_IMAGE_SCHEMES)
 
 
-# The upstream accepts exactly these image mime types and rejects everything
-# else with 400 ``UnsupportedImageFormat`` -- measured live: png/jpeg/jpg/gif/
-# webp pass, while bmp, tiff, avif, heic, svg+xml, pjpeg, x-png and
-# application/octet-stream all fail even with valid PNG bytes inside. The set
+# The upstream accepts exactly these image mime types and rejects anything
+# sent under another label with 400 ``UnsupportedImageFormat`` -- measured
+# live: png/jpeg/gif/webp pass, while bmp, tiff, avif, heic, svg+xml and
+# application/octet-stream fail even with valid PNG bytes inside. The aliases
+# below normalize known alternate spellings (jpg, pjpeg, x-png) to canonical
+# before sending; any other label falls back to the magic bytes. The set
 # is also the intersection the zen families take (Anthropic: png/jpeg/gif/webp,
 # Gemini: png/jpeg/webp), so one canonical spelling serves every route.
 _UPSTREAM_IMAGE_MIMES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
@@ -315,7 +323,8 @@ def _image_data_url(mime: str, data: str) -> str | None:
     image survives a wrong label and a genuinely unsupported blob is dropped
     before it reaches the upstream (a 400 there costs the whole turn).
     """
-    normalized = _IMAGE_MIME_ALIASES.get(mime.strip().lower(), mime.strip().lower())
+    mime_norm = mime.strip().lower()
+    normalized = _IMAGE_MIME_ALIASES.get(mime_norm, mime_norm)
     if normalized not in _UPSTREAM_IMAGE_MIMES:
         try:
             raw = base64.b64decode(data, validate=False)
@@ -328,19 +337,49 @@ def _image_data_url(mime: str, data: str) -> str | None:
     return f"data:{normalized};base64,{data}"
 
 
+def _data_url_parts(url: str) -> tuple[str, str]:
+    """Split a ``data:`` URL into ``(mime, payload)``; an empty mime becomes image/png."""
+    header, _, data = url.partition(",")
+    mime = header[len("data:") :].partition(";")[0] or "image/png"
+    return mime, data
+
+
 def _rewrite_data_url(url: str) -> str | None:
     """Return ``url`` with an upstream-accepted mime, or None when it cannot be one.
 
     ``data:image/bmp;base64,...`` and friends pass the SSRF guard but still
     reach a ``UnsupportedImageFormat`` 400; the magic bytes decide the truth.
-    ``https://`` URLs pass through untouched (the upstream fetches those).
+    Already-canonical URLs and ``https://`` URLs pass through verbatim (mime
+    parameters included). Percent-encoded (non-base64) payloads are only ever
+    passed through when the label is already canonical - the proxy relabels
+    what it base64-decodes, and splicing ``;base64,`` into a percent-encoded
+    RFC 2397 URL would corrupt it. Anything else is not a deliverable image.
     """
     if not url.startswith("data:"):
         return url
     header, _, data = url.partition(",")
-    mime = header[len("data:") :].partition(";")[0] or "image/png"
-    rewritten = _image_data_url(mime, data)
-    return rewritten
+    mime = header[len("data:") :].partition(";")[0].strip().lower()
+    if mime in _UPSTREAM_IMAGE_MIMES:
+        return url
+    if ";base64" not in header.lower():
+        return None
+    return _image_data_url(mime or "image/png", data)
+
+
+def _safe_rewritten_url(url: str) -> str | None:
+    """SSRF-guard plus upstream-mime rewrite for an image URL string.
+
+    Returns None when the scheme is not allowed or the bytes cannot be an
+    upstream-accepted image; ``https://`` URLs pass through untouched.
+    """
+    if not _is_safe_image_url(url):
+        return None
+    return _rewrite_data_url(url)
+
+
+def _chat_image_part(url: str | None) -> Json | None:
+    """The chat content part carrying an image URL, or None when there is none."""
+    return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
 def _normalize_image_url(part: Json) -> Json | None:
@@ -352,35 +391,25 @@ def _normalize_image_url(part: Json) -> Json | None:
     """
     image_url = part.get("image_url")
     if isinstance(image_url, str):
-        if not _is_safe_image_url(image_url):
-            return None
-        url = _rewrite_data_url(image_url)
-        return {"type": "image_url", "image_url": {"url": url}} if url else None
-    if isinstance(image_url, dict) and image_url.get("url"):
+        return _chat_image_part(_safe_rewritten_url(image_url))
+    if isinstance(image_url, dict) and isinstance(image_url.get("url"), str) and image_url.get("url"):
         url = image_url["url"]
-        if not _is_safe_image_url(url):
-            return None
-        rewritten = _rewrite_data_url(url)
+        rewritten = _safe_rewritten_url(url)
         if rewritten is None:
             return None
         return {"type": "image_url", "image_url": {**image_url, "url": rewritten}}
     url = part.get("url")
     if isinstance(url, str):
-        if not _is_safe_image_url(url):
-            return None
-        rewritten = _rewrite_data_url(url)
-        return {"type": "image_url", "image_url": {"url": rewritten}} if rewritten else None
+        return _chat_image_part(_safe_rewritten_url(url))
     # MCP RawImageContent: {"type":"image","data":"<base64>","mimeType":"image/png"}
     data = part.get("data")
     if isinstance(data, str) and data:
         mime = part.get("mimeType") or part.get("mime_type") or "image/png"
+        if not isinstance(mime, str):
+            return None
         if mime.startswith("data:"):
-            if not mime.startswith("data:image/"):
-                return None
-            rewritten = _rewrite_data_url(mime)
-            return {"type": "image_url", "image_url": {"url": rewritten}} if rewritten else None
-        url = _image_data_url(mime, data)
-        return {"type": "image_url", "image_url": {"url": url}} if url else None
+            return _chat_image_part(_safe_rewritten_url(mime))
+        return _chat_image_part(_image_data_url(mime, data))
     return None
 
 
@@ -399,6 +428,13 @@ def _is_inline_image_data(s: str) -> bool:
     return isinstance(s, str) and s.startswith("data:image/") and "base64," in s
 
 
+def _inline_image_part(s: str | None) -> Json | None:
+    """A bare data-URL string as a chat image part, or None when unusable."""
+    if not isinstance(s, str) or not _is_inline_image_data(s):
+        return None
+    return _chat_image_part(_rewrite_data_url(s))
+
+
 def _content_to_chat_parts(content: Any) -> list[Json] | str:
     """Convert Responses content into OpenAI Chat Completions content parts.
 
@@ -407,14 +443,15 @@ def _content_to_chat_parts(content: Any) -> list[Json] | str:
     image parts are present so the upstream multimodal model receives them.
     """
     if content is None or isinstance(content, str):
-        if isinstance(content, str) and _is_inline_image_data(content):
-            return [{"type": "image_url", "image_url": {"url": content}}]
+        img = _inline_image_part(content)
+        if img is not None:
+            return [img]
         return content or ""
     if not isinstance(content, list):
         return flatten_content(content)
 
     has_image = any(
-        isinstance(part, dict) and part.get("type") in {"input_image", "image_url", "image"}
+        (isinstance(part, dict) and part.get("type") in {"input_image", "image_url", "image"})
         or _is_inline_image_data(part)
         for part in content
     )
@@ -424,8 +461,9 @@ def _content_to_chat_parts(content: Any) -> list[Json] | str:
     parts: list[Json] = []
     for part in content:
         if isinstance(part, str):
-            if _is_inline_image_data(part):
-                parts.append({"type": "image_url", "image_url": {"url": part}})
+            img = _inline_image_part(part)
+            if img is not None:
+                parts.append(img)
             elif part:
                 parts.append({"type": "text", "text": part})
             continue
@@ -443,7 +481,9 @@ def _content_to_chat_parts(content: Any) -> list[Json] | str:
             img = _normalize_image_url(part)
             if img is not None:
                 parts.append(img)
-    return parts
+    # Every image was dropped as unusable (unsupported blob): an empty content
+    # list is not valid upstream chat content, so fall back to empty text.
+    return parts or ""
 
 
 def now_unix() -> int:

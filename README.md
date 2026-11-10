@@ -333,8 +333,8 @@ See the [lazycodex docs](https://github.com/code-yeongyu/oh-my-openagent) for se
 - Custom/freeform tool adaptation (Codex `apply_patch` works)
 - Reasoning content replay across tool-call turns
 - Real-time SSE streaming (not synthesized)
-- Image parts are forwarded to the requested model verbatim (data: and https: URLs only); no caption sub-calls and no model substitution
-- SSRF protection on image URLs (`data:image/` and `https://` only)
+- Image parts are forwarded to the requested model (data: and https: URLs only); base64 payloads labelled outside the upstream whitelist are relabelled from the magic bytes, other URLs pass through verbatim when already canonical or are dropped; no caption sub-calls and no model substitution
+- SSRF protection on image URLs (`data:` and `https://` only)
 - Configurable body cap, peer-address guard, authenticated remote mode, keychain credential resolution
 - Local health and model-list endpoints
 - Prefix caching: byte-stable request prefixes plus `include_usage`, with per-model hit ratio on `/cache`

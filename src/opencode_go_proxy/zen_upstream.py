@@ -43,6 +43,7 @@ from .meter import (
 from .passthrough import _relay_stream, _write_empty_stream_error, is_stream_terminal
 from .protocol import (
     ANTHROPIC_THINKING_LEVELS,
+    _data_url_parts,
     _normalize_image_url,
     chat_completion_to_response,
     chat_message_to_response_output,
@@ -739,8 +740,7 @@ def _anthropic_user_blocks(content: Any) -> list[Json]:
         if part_type in {"image_url", "input_image", "image"}:
             url = _image_url(part)
             if url and url.startswith("data:"):
-                header, _, data = url.partition(",")
-                media_type = header[len("data:"):].partition(";")[0] or "image/png"
+                media_type, data = _data_url_parts(url)
                 blocks.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
             elif url and url.startswith("https://"):
                 blocks.append({"type": "image", "source": {"type": "url", "url": url}})
@@ -933,8 +933,7 @@ def responses_payload_to_gemini_payload(payload: Json) -> Json:
                 elif part_type in {"image_url", "input_image", "image"}:
                     url = _image_url(part)
                     if url and url.startswith("data:"):
-                        header, _, data = url.partition(",")
-                        media_type = header[len("data:"):].partition(";")[0] or "image/png"
+                        media_type, data = _data_url_parts(url)
                         parts.append({"inlineData": {"mimeType": media_type, "data": data}})
         for tool_call in message.get("tool_calls") or []:
             if not isinstance(tool_call, dict):

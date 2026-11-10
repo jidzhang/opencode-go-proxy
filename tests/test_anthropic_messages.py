@@ -236,6 +236,45 @@ class TestRequestTranslation:
         assert len(parts) == 3
         assert stats["images"] == 2
 
+    def test_non_image_media_type_relabelled_from_magic_bytes(self):
+        out, stats = anthropic_to_responses_payload({
+            "model": "m",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "look"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                # PNG magic bytes under a stale application/pdf
+                                # label: relabelled and delivered, like the
+                                # Responses-side MCP path does.
+                                "media_type": "application/pdf",
+                                "data": "iVBORw0KGgo=",
+                            },
+                        },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                # Genuine PDF bytes under the same label:
+                                # dropped here instead of failing the turn.
+                                "media_type": "application/pdf",
+                                "data": "JVBERi0xLjQ=",
+                            },
+                        },
+                    ],
+                }
+            ],
+        })
+        parts = out["input"][0]["content"]
+        assert parts[0] == {"type": "input_text", "text": "look"}
+        assert parts[1] == {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo="}
+        assert len(parts) == 2
+        assert stats["images"] == 1
+
     def test_document_flattened_to_placeholder(self):
         out, stats = anthropic_to_responses_payload({
             "model": "m",

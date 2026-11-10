@@ -46,7 +46,7 @@ from .opencode_session import opencode_session_headers
 from .protocol import (
     ANTHROPIC_THINKING_LEVELS,
     _as_int,
-    _rewrite_data_url,
+    _safe_rewritten_url,
     drop_dangling_function_calls,
     extract_reasoning_effort,
     new_response_id,
@@ -147,11 +147,10 @@ def _system_text(value: Any) -> str:
 def _image_part(block: Json) -> Json | None:
     """Anthropic image block to a Responses input_image part.
 
-    Base64 sources become data URLs (data:image only, mirroring the proxy's
-    SSRF guard); https URL sources pass through. Everything else is dropped.
-    The declared media_type is relabelled from the magic bytes when it is not
-    one the upstream accepts, so a real image sent with a stale/odd label
-    still works instead of failing the whole turn with a 400.
+    Base64 sources become data URLs and the magic bytes decide usability, so
+    a real image sent with a stale/odd media_type is relabelled instead of
+    failing the whole turn with a 400 (mirrors the proxy's Responses-side
+    handling); https URL sources pass through. Everything else is dropped.
     """
     source = block.get("source")
     if not isinstance(source, dict):
@@ -163,9 +162,7 @@ def _image_part(block: Json) -> Json | None:
             return None
         media = str(source.get("media_type") or "image/png")
         url = media if media.startswith("data:") else f"data:{media};base64,{data}"
-        if not url.startswith("data:image/"):
-            return None
-        rewritten = _rewrite_data_url(url)
+        rewritten = _safe_rewritten_url(url)
         return {"type": "input_image", "image_url": rewritten} if rewritten else None
     if source_type == "url":
         url = source.get("url")
