@@ -193,6 +193,12 @@ _ERROR_BODY_DRAIN_CAP = 1024 * 1024
 # guard decision by a scheduling beat, but a declared-and-never-sent remainder
 # (oversized-body rejection) must be answered, not waited for.
 _ERROR_BODY_DRAIN_WAIT_SEC = 0.05
+# Total time the drain may spend across all its chunks: the per-select wait
+# only bounds one quiet gap, and when no declared remainder can be trusted
+# (invalid/negative content-length) a client that drips bytes just slower
+# than that wait would pin this handler thread until the 1MB cap. The budget
+# answers the error no matter how slowly the body trickles in.
+_ERROR_BODY_DRAIN_BUDGET_SEC = 1.0
 
 
 class ResponsesProxyHandler(BaseHTTPRequestHandler):
@@ -235,22 +241,26 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
         buffered in ``rfile`` are already off the kernel buffer and cannot
         trigger the RST, so reading the socket directly is sufficient.
 
-        A rejected or unparsable content-length declares no usable remainder
-        (``-5`` and ``abc`` both reach an error response with a real body
-        still queued), so those fall back to draining whatever is available
-        up to the cap instead of assuming zero bytes are waiting.
+        An invalid or negative content-length declares no trustworthy
+        remainder, yet a body may still be queued, so those fall back to
+        draining whatever is available up to the cap instead of assuming
+        zero bytes are waiting. The whole drain also runs against a small
+        total budget, so a client that trickles bytes forever cannot hold
+        the error response hostage.
         """
         try:
-            declared = int(self.headers.get("content-length", "0"))
+            declared: int | None = int(self.headers.get("content-length", "0"))
         except ValueError:
-            declared = -1
-        if declared < 0:
+            declared = None
+        if declared is None or declared < 0:
             remaining = _ERROR_BODY_DRAIN_CAP
         else:
             remaining = min(max(declared - self._body_bytes_read, 0), _ERROR_BODY_DRAIN_CAP)
         try:
+            deadline = time.monotonic() + _ERROR_BODY_DRAIN_BUDGET_SEC
             while remaining > 0:
-                if not select.select([self.request], [], [], _ERROR_BODY_DRAIN_WAIT_SEC)[0]:
+                wait = min(_ERROR_BODY_DRAIN_WAIT_SEC, deadline - time.monotonic())
+                if wait <= 0 or not select.select([self.request], [], [], wait)[0]:
                     return
                 chunk = self.request.recv(min(remaining, 65536))
                 if not chunk:

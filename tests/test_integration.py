@@ -225,11 +225,12 @@ class TestResponsesRoundTrip:
         assert resp.status == 401
         assert "OPENCODE_GO_API_KEY" in body["error"]["message"]
 
-    def test_negative_content_length_rejected(self, server):
+    @pytest.mark.parametrize("bad_length", ["-5", "abc"])
+    def test_bad_content_length_rejected(self, server, bad_length: str) -> None:
         port, _ = server
         conn = HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("POST", "/v1/responses", "{}",
-                     {"content-type": "application/json", "content-length": "-5"})
+                     {"content-type": "application/json", "content-length": bad_length})
         resp = conn.getresponse()
         resp.read()
         conn.close()
