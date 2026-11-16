@@ -20,10 +20,27 @@ _METADATA_ID_KEYS = frozenset(
 )
 
 
+def _header_pairs(headers: Any) -> list[tuple[Any, Any]]:
+    """Header pairs from a mapping (HTTPMessage) or a plain pair sequence."""
+    items = getattr(headers, "items", None)
+    if callable(items):
+        return list(items())
+    try:
+        return list(headers)
+    except TypeError:
+        return []
+
+
 def _header(headers: Mapping[str, Any] | None, name: str) -> str | None:
+    """Read one header case-insensitively.
+
+    The session id is a best-effort affinity hint, never a reason to fail a
+    request, so a header container that only yields pairs reads the same way
+    as one that exposes ``items()``.
+    """
     if headers is None:
         return None
-    for key, value in headers.items():
+    for key, value in _header_pairs(headers):
         if str(key).lower() == name:
             text = str(value).strip()
             return text or None
@@ -104,3 +121,13 @@ def opencode_session_headers(
         OPENCODE_SESSION_HEADER: resolve_opencode_session(headers, payload),
         "x-opencode-client": _header(headers, "x-opencode-client") or "cli",
     }
+
+
+def session_from_headers(headers: Mapping[str, Any] | None) -> str | None:
+    """Read the affinity id back out of an assembled upstream header set.
+
+    Call sites that build headers with :func:`opencode_session_headers` and
+    later report cache accounting use this to key the per-session view without
+    re-deriving the id, which would diverge from what the upstream saw.
+    """
+    return _header(headers, OPENCODE_SESSION_HEADER)

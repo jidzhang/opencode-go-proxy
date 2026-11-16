@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from .protocol import cache_stats_from_usage
+from .trace import trace
 
 # Upstream retry policy. Transient failures (429 / 5xx / network / timeout) are
 # retried a bounded number of times with a small exponential backoff before the
@@ -106,9 +107,103 @@ def usage_tokens(usage: Any) -> tuple[Any, Any, Any]:
     return usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens")
 
 
-def record_cache(tracker: Any, model: str | None, usage: Any) -> None:
-    """Fold one upstream response's cache accounting into the tracker."""
+def record_cache(
+    tracker: Any,
+    model: str | None,
+    usage: Any,
+    session: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Fold one upstream response's cache accounting into the tracker.
+
+    ``session`` is the affinity id sent upstream (``x-opencode-session``). The
+    tracker uses it to tell a cold start from a prefix that broke
+    mid-conversation, so a call site that knows the id should always pass it.
+    ``request_id`` only adds the per-request debug trace, which is what makes
+    a single turn's hit/miss inspectable in the log.
+    """
     stats = cache_stats_from_usage(usage)
     if stats["ratio"] is None:
         return
-    tracker.record(model or "unknown", stats["hit"], stats["miss"])
+    tracker.record(model or "unknown", stats["hit"], stats["miss"], session=session)
+    if request_id:
+        trace(
+            "cache.recorded", level="debug",
+            request_id=request_id,
+            model=model,
+            session=session,
+            cache={"hit": stats["hit"], "miss": stats["miss"], "ratio": stats["ratio"]},
+        )
+
+
+def with_include_usage(body: dict[str, Any], *, stream: bool) -> dict[str, Any]:
+    """Return a chat body with streamed usage reporting turned on.
+
+    Chat-completions endpoints omit usage from a stream unless
+    ``stream_options.include_usage`` is set, and without usage there is no
+    prefix-cache accounting to report or forward. Only that one flag is added:
+    a client-supplied ``stream_options`` keeps its other keys, and an explicit
+    ``include_usage`` is left alone because the caller already decided.
+    """
+    if not stream:
+        return body
+    options = body.get("stream_options")
+    if options is None:
+        updated = dict(body)
+        updated["stream_options"] = {"include_usage": True}
+        return updated
+    if isinstance(options, dict) and "include_usage" not in options:
+        updated = dict(body)
+        updated["stream_options"] = {**options, "include_usage": True}
+        return updated
+    return body
+
+
+class UsageTap:
+    """Capture the usage object from relayed chat-completions SSE lines.
+
+    With ``include_usage`` set, a chat stream ends with one extra chunk whose
+    ``choices`` is empty and whose ``usage`` carries the token counts. The tap
+    keeps the last non-null usage it sees and returns every line byte-for-byte,
+    so it can sit in the relay's transform slot without changing the stream.
+    """
+
+    def __init__(self) -> None:
+        self.usage: dict[str, Any] | None = None
+
+    def __call__(self, line: bytes) -> bytes:
+        if self.usage is not None or b'"usage"' not in line:
+            return line
+        payload = line.strip()
+        if payload.startswith(b"data:"):
+            payload = payload[len(b"data:"):].strip()
+        if not payload or payload == b"[DONE]":
+            return line
+        try:
+            event = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return line
+        usage = event.get("usage") if isinstance(event, dict) else None
+        if isinstance(usage, dict) and usage:
+            self.usage = usage
+        return line
+
+
+def record_cache_from_body(
+    tracker: Any,
+    model: str | None,
+    response_body: bytes,
+    session: str | None = None,
+    request_id: str | None = None,
+) -> None:
+    """Fold a non-stream chat response's usage into the cache tracker.
+
+    A non-stream chat completion carries usage in the JSON body itself; a body
+    that is not JSON (an error page, a truncated read) is simply not counted.
+    """
+    try:
+        value = json.loads(response_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return
+    usage = value.get("usage") if isinstance(value, dict) else None
+    record_cache(tracker, model, usage, session=session, request_id=request_id)
