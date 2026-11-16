@@ -337,7 +337,7 @@ See the [lazycodex docs](https://github.com/code-yeongyu/oh-my-openagent) for se
 - SSRF protection on image URLs (`data:` and `https://` only)
 - Configurable body cap, peer-address guard, authenticated remote mode, keychain credential resolution
 - Local health and model-list endpoints
-- Prefix caching: byte-stable request prefixes plus `include_usage`, with per-model hit ratio on `/cache`
+- Prefix caching: byte-stable request prefixes plus `include_usage` on every chat surface, with per-model and per-session hit ratio on `/cache` (`cold_starts` / `prefix_lost` show whether a long-lived cache is actually reused)
 - Honest usage meter: append-only `usage-events.jsonl` in the state dir (truncated or empty responses never count as success)
 - Upstream retry with bounded exponential backoff on transient failures (429/5xx/network/timeout)
 - Terminal OpenCode Go usage-limit failures are normalized to OpenAI
@@ -369,19 +369,26 @@ The proxy is built for exactly that:
 - Conversation history is appended in order; translation is deterministic, so the
   serialized prefix is identical across requests in a session - and across sessions
   that share the same system prompt and tools.
-- Streaming requests set `stream_options: { "include_usage": true }` so the upstream
-  reports its cache accounting (`prompt_cache_hit_tokens` / `cached_tokens`) in the
-  stream; without this most OpenAI-compatible endpoints omit usage entirely.
+- Every chat-completions request (both the `/v1/responses` translation and the
+  verbatim `/v1/chat/completions` relay) sets
+  `stream_options: { "include_usage": true }` on a stream so the upstream reports
+  its cache accounting (`prompt_cache_hit_tokens` / `cached_tokens`); without this
+  most OpenAI-compatible endpoints omit usage entirely. That flag is the only
+  field the verbatim surface ever adds - a client-supplied `stream_options` keeps
+  its other keys, and an explicit `include_usage` is left alone.
+- The same affinity headers (`x-opencode-session`, `x-opencode-client`) go to
+  every upstream surface, Go and zen alike, so one conversation keeps one session
+  id on every entry point.
 - Cache hits are surfaced to Codex in the standard Responses shape
   (`usage.input_tokens_details.cached_tokens`), so the app shows them in its token
   display.
 
 ### Checking the hit ratio
 
-Every request with cache accounting is logged (look for `"cache": {...}` on
-`response.converted` trace lines - a `debug`-level event, so run with
-`OPENCODE_GO_PROXY_LOG_LEVEL=debug` first). The aggregate is also exposed on
-a metrics endpoint:
+Every request with cache accounting emits one `cache.recorded` trace line carrying
+`{"hit", "miss", "ratio"}` plus the session id - a `debug`-level event, so run with
+`OPENCODE_GO_PROXY_LOG_LEVEL=debug` first. The aggregate is also exposed on a
+metrics endpoint:
 
 ```bash
 curl http://127.0.0.1:8787/cache
@@ -398,6 +405,18 @@ curl http://127.0.0.1:8787/cache
       "hit_ratio": 0.990099
     }
   ],
+  "sessions": [
+    {
+      "session": "9f2c...",
+      "model": "deepseek-v4.1-flash",
+      "cache_hit_tokens": 98000,
+      "cache_miss_tokens": 700,
+      "requests": 49,
+      "hit_ratio": 0.992913,
+      "cold_starts": 1,
+      "prefix_lost": 0
+    }
+  ],
   "totals": { "...": "..." }
 }
 ```
@@ -405,6 +424,15 @@ curl http://127.0.0.1:8787/cache
 Within a session, every request after the first shares the full previous prefix, so
 cache-eligible requests typically run at 99%+ hit ratio; only the genuinely new delta
 misses. The first request of a brand-new context always misses (nothing is cached yet).
+
+`sessions` is the view that says whether the provider's multi-hour cache is actually
+being used. Providers keep a prompt prefix for hours, so a healthy conversation shows
+`cold_starts: 1` and `prefix_lost: 0` no matter how long it runs. `prefix_lost` counts
+requests that reported **zero** cached tokens *after* the session already had a hit:
+that is a broken prefix, not a cold start, and it is the signal that something
+invalidated the cache (a changed system prompt, a reordered tool list, or the same
+conversation arriving through a different entry point). The 200 most recently active
+sessions are kept; the totals count every session the process has seen.
 
 ### Checking quota
 

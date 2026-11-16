@@ -42,7 +42,7 @@ from .go_upstream import (
     handle_go_messages_request,
 )
 from .meter import BYTES_PER_TOKEN_ESTIMATE, record_usage_event
-from .opencode_session import opencode_session_headers
+from .opencode_session import opencode_session_headers, session_from_headers
 from .protocol import (
     ANTHROPIC_THINKING_LEVELS,
     _as_int,
@@ -922,6 +922,7 @@ def handle_anthropic_messages_request(
         started=started,
         raw_payload=raw_payload,
         provider=GO_PROVIDER,
+        session_id=session_from_headers(extra_headers),
     )
     engine._start_keepalive()
     try:

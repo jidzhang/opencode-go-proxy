@@ -40,6 +40,7 @@ from .meter import (
     note_real_input_tokens,
     record_usage_event,
 )
+from .opencode_session import opencode_session_headers, session_from_headers
 from .passthrough import _relay_stream, _write_empty_stream_error, is_stream_terminal
 from .protocol import (
     ANTHROPIC_THINKING_LEVELS,
@@ -76,12 +77,15 @@ from .streaming import (
 )
 from .trace import _mask_trace_body, trace
 from .upstream import (
+    UsageTap,
     default_max_retries,
     normalize_usage_limit_error,
     record_cache,
+    record_cache_from_body,
     retriable_http_failure,
     retry_sleep,
     usage_tokens,
+    with_include_usage,
 )
 from .upstream_headers import base_upstream_headers
 from .zen_catalog import ZEN_PREFIX, resolve_family, zen_families, zen_model_ids
@@ -1360,7 +1364,13 @@ def call_family_responses(
         )
         raise
     if family == "openai_chat":
-        record_cache(config.cache_tracker, body.get("model"), value.get("usage"))
+        record_cache(
+            config.cache_tracker,
+            body.get("model"),
+            value.get("usage"),
+            session=session_from_headers(extra_headers),
+            request_id=request_id,
+        )
     inp, outp, total = _zen_tokens(value, family)
     _meter_provider(
         model,
@@ -1404,6 +1414,7 @@ class _ZenStreamEngine:
         started: float,
         raw_payload: bytes,
         provider: str = ZEN_PROVIDER,
+        session_id: str | None = None,
     ) -> None:
         self.handler = handler
         self.config = config
@@ -1415,6 +1426,7 @@ class _ZenStreamEngine:
         self.started = started
         self.raw_payload = raw_payload
         self.provider = provider
+        self.session_id = session_id
         self.retries = 0
 
         self.client_alive = True
@@ -1868,7 +1880,13 @@ class _ZenStreamEngine:
         self.send_event({"type": "response.completed", "response": final})
         self._write(b"data: [DONE]\n\n")
         if self.family == "openai_chat":
-            record_cache(self.config.cache_tracker, self.bare_id, self.usage)
+            record_cache(
+                self.config.cache_tracker,
+                self.bare_id,
+                self.usage,
+                session=self.session_id,
+                request_id=self.request_id,
+            )
         _meter_provider(
             self.model,
             self.started,
@@ -2420,6 +2438,7 @@ def handle_family_responses_request(
         family=family, bare_id=bare_id, model=model,
         response_id=new_response_id(), started=started, raw_payload=raw_payload,
         provider=provider,
+        session_id=session_from_headers(extra_headers),
     )
     engine._start_keepalive()
     try:
@@ -2444,6 +2463,7 @@ def handle_zen_responses_request(handler: Any, payload: Json, config: ProxyConfi
         api_key=resolve_api_key(config, request_id),
         base_url=zen_base_url(),
         provider=ZEN_PROVIDER,
+        extra_headers=opencode_session_headers(handler.headers, payload),
     )
 
 
@@ -2462,11 +2482,19 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
     api_key = resolve_api_key(config, request_id)
     body = dict(payload)
     body["model"] = bare_id
-    url = _zen_endpoint("openai_chat", bare_id, stream=payload.get("stream") is True)
+    stream = payload.get("stream") is True
+    # Usage is what carries the prefix-cache accounting; a chat stream only
+    # reports it when asked. Nothing else in the verbatim body is touched.
+    body = with_include_usage(body, stream=stream)
+    # Same affinity headers the Go path sends: the zen gateway routes on the
+    # session id, and without it a conversation cannot stay on one cache.
+    session_headers = opencode_session_headers(handler.headers, payload)
+    session_id = session_from_headers(session_headers)
+    url = _zen_endpoint("openai_chat", bare_id, stream=stream)
     raw_payload = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    headers = _family_headers("openai_chat", api_key)
+    headers = _family_headers("openai_chat", api_key, extra_headers=session_headers)
 
-    if payload.get("stream") is True:
+    if stream:
         req = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
         trace("zen.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), family="openai_chat", stream=True)
         try:
@@ -2490,7 +2518,13 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
         handler.send_header("content-type", "text/event-stream")
         handler.send_header("cache-control", "no-cache")
         handler.end_headers()
-        outcome = _relay_stream(response, handler, request_id)
+        tap = UsageTap()
+        outcome = _relay_stream(response, handler, request_id, tap)
+        if tap.usage is not None:
+            record_cache(
+                config.cache_tracker, bare_id, tap.usage,
+                session=session_id, request_id=request_id,
+            )
         if outcome == "done":
             _meter_zen(model, started, 200, retries=retries or None)
         elif outcome == "gone":
@@ -2504,6 +2538,11 @@ def handle_zen_chat_request(handler: Any, payload: Json, config: ProxyConfig, re
         url, raw_payload, headers, config, request_id
     )
     _meter_zen(model, started, status, retries=retries or None)
+    if status == HTTPStatus.OK:
+        record_cache_from_body(
+            config.cache_tracker, bare_id, raw,
+            session=session_id, request_id=request_id,
+        )
     handler.send_response(status)
     if retry_after:
         handler.send_header("retry-after", retry_after)

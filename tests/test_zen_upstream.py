@@ -1241,3 +1241,122 @@ class TestAppDispatch:
             go_server.server_close()
             zen_server.shutdown()
             zen_server.server_close()
+
+
+class TestZenChatCacheAndAffinity:
+    def test_stream_asks_for_usage_and_records_the_cache_accounting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _fake_key(monkeypatch)
+        lines = [
+            b'data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\n',
+            b'data: {"choices":[],"usage":{"prompt_cache_hit_tokens":700,"prompt_cache_miss_tokens":50}}\n',
+            b"data: [DONE]\n",
+        ]
+        captured: list[urllib.request.Request] = []
+        config = make_config()
+
+        def fake_urlopen(req, **kw):
+            captured.append(req)
+            return _UpstreamStream(lines)
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_chat_request(
+                _FakeHandler(),
+                {"model": "zen/deepseek-v4.1-flash", "messages": [], "stream": True},
+                config, "req",
+            )
+
+        assert _request_body(captured[0])["stream_options"] == {"include_usage": True}
+        session = config.cache_tracker.snapshot()["sessions"][0]
+        assert session["cache_hit_tokens"] == 700
+        assert session["cache_miss_tokens"] == 50
+
+    def test_affinity_headers_are_sent_upstream(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_key(monkeypatch)
+        captured: list[urllib.request.Request] = []
+        handler = _FakeHandler()
+        handler.headers = [("x-opencode-session", "zen-session"), ("x-opencode-client", "cli")]
+
+        def fake_urlopen(req, **kw):
+            captured.append(req)
+            return _UpstreamStream([b"data: [DONE]\n"])
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_chat_request(
+                handler,
+                {"model": "zen/deepseek-v4.1-flash", "messages": [], "stream": True},
+                make_config(), "req",
+            )
+
+        headers = _request_headers(captured[0])
+        assert headers["x-opencode-session"] == "zen-session"
+        assert headers["x-opencode-client"] == "cli"
+
+    def test_a_derived_session_is_used_when_the_client_sends_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _fake_key(monkeypatch)
+        captured: list[urllib.request.Request] = []
+        config = make_config()
+
+        def fake_urlopen(req, **kw):
+            captured.append(req)
+            return _UpstreamStream([
+                b'data: {"choices":[],"usage":{"prompt_cache_hit_tokens":1,"prompt_cache_miss_tokens":1}}\n',
+                b"data: [DONE]\n",
+            ])
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+             mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0):
+            zen_upstream.handle_zen_chat_request(
+                _FakeHandler(),
+                {"model": "zen/deepseek-v4.1-flash", "messages": [], "stream": True},
+                config, "req",
+            )
+
+        sent = _request_headers(captured[0])["x-opencode-session"]
+        assert sent
+        assert config.cache_tracker.snapshot()["sessions"][0]["session"] == sent
+
+    def test_non_stream_records_the_cache_accounting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _fake_key(monkeypatch)
+        raw = b'{"choices":[],"usage":{"prompt_cache_hit_tokens":20,"prompt_cache_miss_tokens":5}}'
+        config = make_config()
+        with mock.patch("urllib.request.urlopen", return_value=mock.Mock(
+            status=200, headers={}, read=lambda: raw, __enter__=lambda s: s, __exit__=lambda *a: False
+        )):
+            zen_upstream.handle_zen_chat_request(
+                _FakeHandler(),
+                {"model": "zen/deepseek-v4.1-flash", "messages": []},
+                config, "req",
+            )
+        session = config.cache_tracker.snapshot()["sessions"][0]
+        assert session["cache_hit_tokens"] == 20
+        assert session["cache_miss_tokens"] == 5
+
+    def test_zen_responses_requests_carry_affinity_headers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _fake_key(monkeypatch)
+        captured: list[urllib.request.Request] = []
+        handler = _FakeHandler()
+        handler.headers = [("x-opencode-session", "resp-session")]
+
+        def fake_urlopen(req, **kw):
+            captured.append(req)
+            return mock.Mock(
+                status=200, headers={}, read=lambda: b'{"id":"r","output":[]}',
+                __enter__=lambda s: s, __exit__=lambda *a: False,
+            )
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            zen_upstream.handle_zen_responses_request(
+                handler,
+                {"model": "zen/deepseek-v4.1-flash", "input": "hi"},
+                make_config(), "req",
+            )
+
+        assert _request_headers(captured[0])["x-opencode-session"] == "resp-session"

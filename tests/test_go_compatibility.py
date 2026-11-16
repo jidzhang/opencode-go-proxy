@@ -397,3 +397,127 @@ def test_merged_catalog_uses_explicit_go_slugs_for_native_collisions(
     assert "gpt-5.6-luna" in slugs
     assert "opencode-go/gpt-5.6-luna" in slugs
     assert "opencode-go/muse-spark-1.3-contributor" in slugs
+
+
+def _stream_upstream(lines: list[bytes]):
+    """A urlopen stand-in that yields SSE lines the way a real response does."""
+
+    class _Stream:
+        status = 200
+
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+
+        def __iter__(self):
+            return iter(lines)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    return _Stream()
+
+
+def test_chat_stream_asks_for_usage_and_records_the_cache_accounting() -> None:
+    lines = [
+        b'data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}\n',
+        b'data: {"choices":[],"usage":{"prompt_cache_hit_tokens":900,"prompt_cache_miss_tokens":100}}\n',
+        b"data: [DONE]\n",
+    ]
+    captured = []
+
+    def fake_urlopen(request, **kwargs):
+        captured.append(request)
+        return _stream_upstream(lines)
+
+    proxy_config = config()
+    with (
+        mock.patch("opencode_go_proxy.go_upstream.resolve_api_key", return_value="go-key"),
+        mock.patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0),
+    ):
+        handler = Handler({"x-opencode-session": "sess-1"})
+        go_upstream.handle_go_chat_request(
+            handler,
+            {
+                "model": "opencode-go/deepseek-v4.1-flash",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            proxy_config,
+            "chat-request",
+        )
+
+    # The only body change on the verbatim surface is the usage flag.
+    assert request_body(captured[0])["stream_options"] == {"include_usage": True}
+    assert request_body(captured[0])["messages"] == [{"role": "user", "content": "hi"}]
+    # Every upstream line reaches the client unchanged.
+    assert handler.wfile.getvalue() == b"".join(lines)
+    snapshot = proxy_config.cache_tracker.snapshot()
+    session = snapshot["sessions"][0]
+    assert session["session"] == "sess-1"
+    assert session["cache_hit_tokens"] == 900
+    assert session["cache_miss_tokens"] == 100
+
+
+def test_chat_non_stream_records_the_cache_accounting() -> None:
+    captured = []
+
+    def fake_urlopen(request, **kwargs):
+        captured.append(request)
+        return response(
+            {
+                "id": "chatcmpl_1",
+                "choices": [],
+                "usage": {"prompt_cache_hit_tokens": 40, "prompt_cache_miss_tokens": 10},
+            }
+        )
+
+    proxy_config = config()
+    with (
+        mock.patch("opencode_go_proxy.go_upstream.resolve_api_key", return_value="go-key"),
+        mock.patch("urllib.request.urlopen", side_effect=fake_urlopen),
+    ):
+        go_upstream.handle_go_chat_request(
+            Handler({"x-opencode-session": "sess-2"}),
+            {
+                "model": "opencode-go/deepseek-v4.1-flash",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            proxy_config,
+            "chat-request",
+        )
+
+    # A non-stream request has nothing to ask for, so the body is untouched.
+    assert "stream_options" not in request_body(captured[0])
+    session = proxy_config.cache_tracker.snapshot()["sessions"][0]
+    assert session["session"] == "sess-2"
+    assert session["cache_hit_tokens"] == 40
+
+
+def test_messages_surface_body_is_never_rewritten() -> None:
+    captured = []
+
+    def fake_urlopen(request, **kwargs):
+        captured.append(request)
+        return _stream_upstream([b"data: [DONE]\n"])
+
+    with (
+        mock.patch("opencode_go_proxy.go_upstream.resolve_api_key", return_value="go-key"),
+        mock.patch("urllib.request.urlopen", side_effect=fake_urlopen),
+        mock.patch("opencode_go_proxy.streaming.keepalive_sec", return_value=60.0),
+    ):
+        go_upstream.handle_go_messages_request(
+            Handler(),
+            {
+                "model": "opencode-go/minimax-m3",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            config(),
+            "messages-request",
+        )
+
+    assert "stream_options" not in request_body(captured[0])

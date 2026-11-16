@@ -78,6 +78,17 @@
 
 ### Added
 
+- Per-session prefix-cache accounting. `CacheTracker` now keys every recorded
+  request by the affinity id sent upstream (`x-opencode-session`) alongside the
+  model, and `/cache` reports a `sessions` array plus `cold_starts` /
+  `prefix_lost` totals. `prefix_lost` counts requests that reported zero cached
+  tokens *after* the session already had a hit - the signal that a long-lived
+  provider cache stopped being reused mid-conversation. The 200 most recently
+  active sessions are kept; the per-model totals are unchanged.
+- Per-request cache telemetry: every response with cache accounting emits one
+  `cache.recorded` debug line with `{"hit", "miss", "ratio"}` and the session
+  id. The README previously documented this on a `response.converted` event
+  that never existed.
 - Claude Code support: `POST /v1/messages` now serves every certified Go
   model, not only the nine Anthropic Messages models. Messages-family models
   keep the byte-verbatim relay; Chat- and Responses-family models translate
@@ -117,6 +128,17 @@
 
 ### Changed
 
+- The verbatim `/v1/chat/completions` relay now sets
+  `stream_options.include_usage` on streamed requests and folds the reported
+  usage into `/cache`. That surface previously forwarded the body untouched,
+  so a chat-surface DeepSeek turn returned no usage at all and the proxy could
+  not tell a cache hit from a miss. The flag is the only field ever added: a
+  client `stream_options` keeps its other keys and an explicit `include_usage`
+  is respected.
+- Zen entry points now send the same `x-opencode-session` / `x-opencode-client`
+  affinity headers the Go path already sent, and record their cache accounting
+  under that session. Zen chat streaming also asks for usage, so its turns are
+  counted instead of silently skipped.
 - The structured trace stream was redesigned around severity levels instead
   of an undifferentiated stderr flood. Every JSON line now carries a `level`
   (`debug`/`info`/`warn`/`error`) and every trace site is tagged by what it

@@ -14,17 +14,21 @@ from .config import ProxyConfig
 from .errors import ProxyError
 from .go_models import ANTHROPIC_MESSAGES, GOOGLE_GEMINI, OPENAI_CHAT, go_family_for
 from .meter import record_usage_event
-from .opencode_session import opencode_session_headers
+from .opencode_session import opencode_session_headers, session_from_headers
 from .passthrough import _relay_stream
 from .protocol import require_model
 from .secrets import resolve_api_key
 from .streaming import _ConnectFailed, _open_upstream_stream
 from .trace import trace
 from .upstream import (
+    UsageTap,
     default_max_retries,
     normalize_usage_limit_error,
+    record_cache,
+    record_cache_from_body,
     retriable_http_failure,
     retry_sleep,
+    with_include_usage,
 )
 from .upstream_headers import base_upstream_headers
 from .zen_upstream import (
@@ -154,14 +158,22 @@ def _handle_go_verbatim_request(
     started = time.time()
     model = str(payload["model"])
     bare_id = bare_go_id(model)
+    stream = payload.get("stream") is True
+    # Chat-completions is the one verbatim surface that reports prefix-cache
+    # accounting, and only when the stream asks for usage. The body stays a
+    # verbatim relay otherwise: no other field is rewritten.
     body = dict(payload)
     body["model"] = bare_id
+    if family == OPENAI_CHAT:
+        body = with_include_usage(body, stream=stream)
     raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    session_headers = opencode_session_headers(handler.headers, payload)
     headers = {
         **base_upstream_headers(),
-        **opencode_session_headers(handler.headers, payload),
+        **session_headers,
         **auth_headers,
     }
+    session_id = session_from_headers(session_headers)
     url = f"{config.chat_base_url}{endpoint}"
     req = urllib.request.Request(
         url,
@@ -175,9 +187,9 @@ def _handle_go_verbatim_request(
         url=url,
         bytes=len(raw),
         family=family,
-        stream=payload.get("stream") is True,
+        stream=stream,
     )
-    if payload.get("stream") is True:
+    if stream:
         try:
             response, retries = _open_upstream_stream(
                 req, config, request_id, default_max_retries()
@@ -199,7 +211,13 @@ def _handle_go_verbatim_request(
         handler.send_header("content-type", "text/event-stream")
         handler.send_header("cache-control", "no-cache")
         handler.end_headers()
-        outcome = _relay_stream(response, handler, request_id)
+        tap = UsageTap() if family == OPENAI_CHAT else None
+        outcome = _relay_stream(response, handler, request_id, tap)
+        if tap is not None:
+            record_cache(
+                config.cache_tracker, bare_id, tap.usage,
+                session=session_id, request_id=request_id,
+            )
         record_usage_event(
             model=model,
             status=200 if outcome == "done" else 0 if outcome == "gone" else 502,
@@ -257,6 +275,11 @@ def _handle_go_verbatim_request(
     normalized_body = normalize_usage_limit_error(response_body)
     if normalized_body is not None:
         response_body = normalized_body
+    if family == OPENAI_CHAT and client_status == HTTPStatus.OK:
+        record_cache_from_body(
+            config.cache_tracker, bare_id, response_body,
+            session=session_id, request_id=request_id,
+        )
     handler.send_header("content-length", str(len(response_body)))
     handler.end_headers()
     handler.wfile.write(response_body)
