@@ -135,6 +135,13 @@ set "ENV_EXTRA="OPENCODE_GO_API_KEY=%OPENCODE_GO_API_KEY%""
 set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_CALLER_TOKEN=%OPENCODE_GO_PROXY_CALLER_TOKEN%""
 set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_BIND=%BIND%""
 set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_PORT=19999""
+rem The service runs as LocalSystem, whose %USERPROFILE% is the system profile,
+rem so the state dir would default to a directory the operator cannot read and
+rem /state, /cache and /quota would report an empty history. Pin it to the
+rem profile of whoever installed the service (this script runs as that user).
+rem Only set when USERPROFILE is non-empty: an empty value must not shadow the
+rem library default.
+if defined USERPROFILE set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_STATE_DIR=%USERPROFILE%\.codex\opencode-go-proxy""
 rem Only a shared (non-loopback) instance opts into remote mode; a loopback
 rem bind never starts with the remote guard disabled explicitly.
 if "%ALLOW_REMOTE%"=="1" set "ENV_EXTRA=%ENV_EXTRA% "OPENCODE_GO_PROXY_ALLOW_REMOTE=1""
