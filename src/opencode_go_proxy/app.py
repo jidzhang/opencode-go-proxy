@@ -72,6 +72,25 @@ class ProxyHTTPServer(ThreadingHTTPServer):
         self.server_name = str(self.server_address[0])
         self.server_port = int(self.server_address[1])
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Keep a client disconnect out of the stderr traceback.
+
+        socketserver prints a full stack for anything a handler lets escape.
+        A peer that hung up (WinError 10053/10054) is routine and already
+        traced as ``client.disconnected`` where it is understood; printing
+        20 lines of ``ConnectionAbortedError`` for it buries real crashes.
+        Every other exception keeps the stdlib behaviour.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, ConnectionError):
+            trace(
+                "client.disconnected", level="info",
+                message="client closed the connection before the response completed",
+                peer=str(client_address[0]) if client_address else None,
+            )
+            return
+        super().handle_error(request, client_address)
+
 
 def _listener_already_active(bind: str, port: int) -> bool:
     """True when another socket already accepts connections on this port.
@@ -283,6 +302,27 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
             headers = {"retry-after": exc.headers["retry-after"]}
         self._send_json(payload or self._error_payload(exc), status=exc.status, headers=headers)
 
+    def _send_proxy_error_or_disconnect(
+        self, exc: ProxyError, *, payload: Json | None = None, request_id: str | None = None
+    ) -> None:
+        """Write a proxy error envelope, treating a gone client as a disconnect.
+
+        A slow upstream failure is exactly when a client gives up, so the error
+        write itself can land on a closed socket (WinError 10053 as
+        ConnectionAbortedError, or 10054 as ConnectionResetError). Those raise
+        from *inside* the ``except ProxyError`` handler, where the sibling
+        ``except ConnectionError`` clause cannot see them: the exception escapes
+        to socketserver, which prints a 20-line traceback for what is only a
+        client that left. Swallow and trace it here instead.
+        """
+        try:
+            self._send_proxy_error(exc, payload=payload)
+        except ConnectionError:
+            trace(
+                "client.disconnected", level="info", request_id=request_id,
+                message="client closed connection while the error envelope was written",
+            )
+
     @staticmethod
     def _request_model(payload: Json) -> str:
         raw_model = require_model(payload)
@@ -325,7 +365,7 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
             self._guard_request()
         except ProxyError as exc:
             trace("request.failed", level="warn", status=exc.status, message=exc.message)
-            self._send_proxy_error(exc)
+            self._send_proxy_error_or_disconnect(exc)
             return
         if self.path in {"/health", "/v1/health"}:
             self._send_json({"status": "ok"})
@@ -432,8 +472,10 @@ class ResponsesProxyHandler(BaseHTTPRequestHandler):
                 handle_go_responses_request(self, payload, config, request_id)
         except ProxyError as exc:
             trace("request.failed", level="warn", request_id=request_id, status=exc.status, message=exc.message)
-            self._send_proxy_error(
-                exc, payload=anthropic_error_payload(exc) if anthropic_surface else None
+            self._send_proxy_error_or_disconnect(
+                exc,
+                payload=anthropic_error_payload(exc) if anthropic_surface else None,
+                request_id=request_id,
             )
         except ConnectionError:
             # The client went away mid-response (including while an error

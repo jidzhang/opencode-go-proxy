@@ -1,6 +1,7 @@
 import gzip
 import json
 import os
+import queue
 import socket
 import subprocess
 import unittest
@@ -9,9 +10,12 @@ from unittest import mock
 
 import zstandard
 
+from opencode_go_proxy import trace as trace_mod
 from opencode_go_proxy.app import (
     ProxyConfig,
     ProxyError,
+    ProxyHTTPServer,
+    ResponsesProxyHandler,
     _listener_already_active,
     _maybe_dump_request,
     decode_request_body,
@@ -280,3 +284,75 @@ class DoubleStartGuardTests(unittest.TestCase):
         port = sock.getsockname()[1]
         sock.close()
         self.assertFalse(_listener_already_active("127.0.0.1", port))
+
+
+class ClientGoneOnErrorWriteTests(unittest.TestCase):
+    """A disconnect while writing an error envelope must not leak a traceback.
+
+    Production 2026-11-17: a 10060 timeout turned into a 502, the client had
+    already given up, and the write raised ConnectionAbortedError (10053)
+    from *inside* the ``except ProxyError`` clause. The sibling
+    ``except ConnectionError`` could not catch that, so socketserver printed a
+    20-line traceback for a routine disconnect.
+    """
+
+    def _handler(self, write_error: BaseException | None):
+        """A handler whose wfile raises ``write_error`` on write."""
+        handler = ResponsesProxyHandler.__new__(ResponsesProxyHandler)
+        handler._body_bytes_read = 0
+        handler.headers = {}
+        handler.request = mock.MagicMock()
+
+        class _Writer:
+            def write(self, _raw):
+                if write_error is not None:
+                    raise write_error
+
+        handler.wfile = _Writer()
+        handler.send_response = mock.MagicMock()
+        handler.send_header = mock.MagicMock()
+        handler.end_headers = mock.MagicMock()
+        return handler
+
+    def test_aborted_error_write_is_traced_as_disconnect(self) -> None:
+        exc = ProxyError(HTTPStatus.BAD_GATEWAY, "upstream network error")
+        with mock.patch.object(trace_mod, "_ensure_writer"), mock.patch.object(
+            trace_mod, "_queue", queue.Queue()
+        ):
+            handler = self._handler(ConnectionAbortedError("client went away"))
+            handler._send_proxy_error_or_disconnect(exc, request_id="req1")
+            events = []
+            while True:
+                try:
+                    events.append(trace_mod._queue.get_nowait())
+                except queue.Empty:
+                    break
+        names = [record["event"] for record in events]
+        self.assertIn("client.disconnected", names)
+        record = next(r for r in events if r["event"] == "client.disconnected")
+        self.assertEqual(record["request_id"], "req1")
+
+    def test_live_client_still_receives_the_envelope(self) -> None:
+        exc = ProxyError(HTTPStatus.BAD_GATEWAY, "upstream network error")
+        handler = self._handler(None)
+        handler._send_proxy_error_or_disconnect(exc, request_id="req2")
+        handler.send_response.assert_called_once_with(HTTPStatus.BAD_GATEWAY)
+
+    def test_server_handle_error_swallows_connection_errors(self) -> None:
+        """ProxyHTTPServer.handle_error keeps a disconnect out of stderr."""
+        server = ProxyHTTPServer.__new__(ProxyHTTPServer)
+        with mock.patch.object(trace_mod, "_ensure_writer"), mock.patch.object(
+            trace_mod, "_queue", queue.Queue()
+        ):
+            try:
+                raise ConnectionResetError("peer reset")
+            except ConnectionResetError:
+                server.handle_error(mock.MagicMock(), ("127.0.0.1", 1234))
+            events = []
+            while True:
+                try:
+                    events.append(trace_mod._queue.get_nowait())
+                except queue.Empty:
+                    break
+        names = [record["event"] for record in events]
+        self.assertIn("client.disconnected", names)

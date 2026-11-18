@@ -159,22 +159,15 @@
 
 ### Fixed
 
-- The TCP/TLS handshake now has its own timeout,
-  `OPENCODE_GO_PROXY_CONNECT_TIMEOUT_SEC` (default `15`, `0` disables). A
-  black-holed connect (SYN dropped, `WinError 10060`) used to spend the whole
-  `--timeout-sec` per attempt - 42s observed on 2026-11-17, so the two-retry
-  policy held the client for 126s before the 502. `--timeout-sec` could not
-  simply be lowered because it also bounds silent streaming reads; the connect
-  cap applies only to the handshake and the socket is given the full request
-  timeout once connected, so long reasoning streams keep their window. A
-  black-holed upstream now fails in 45s instead of 126s
-  (`src/opencode_go_proxy/upstream_pool.py`).
-- A retry sequence is now bounded by wall clock as well as attempt count.
-  `OPENCODE_GO_PROXY_RETRY_BUDGET_SEC` (default `60`, `0` disables) is the
-  longest a request may spend retrying before the error is surfaced, so a
-  slow-failing upstream cannot hold a client through an unbounded number of
-  full-length attempts (`src/opencode_go_proxy/upstream.py`, `streaming.py`,
-  `go_upstream.py`, `zen_upstream.py`).
+- A client that disconnects while a proxy error envelope is being written no
+  longer prints a socketserver traceback. The error write happens inside the
+  `except ProxyError` clause, so a `ConnectionAbortedError` (WinError 10053)
+  raised there could not be caught by the sibling `except ConnectionError`;
+  it escaped to `handle_error` and logged a full stack for a routine
+  disconnect. The write now goes through
+  `_send_proxy_error_or_disconnect`, and `ProxyHTTPServer.handle_error`
+  traces any remaining `ConnectionError` as `client.disconnected`
+  (`src/opencode_go_proxy/app.py`).
 - Empty-stream exhaustion no longer ends a Responses-family turn with a
   silent, valid-but-empty completion: clients logged "no text, no tool
   calls, and no usage" and the agent stopped mid-task as if the work were
