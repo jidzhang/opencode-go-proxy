@@ -27,6 +27,7 @@ from .upstream import (
     record_cache,
     record_cache_from_body,
     retriable_http_failure,
+    retry_allowed,
     retry_sleep,
     with_include_usage,
 )
@@ -230,6 +231,9 @@ def _handle_go_verbatim_request(
     max_retries = default_max_retries()
     retries = 0
     retry_after = None
+    # Separate monotonic reference for the retry budget: `started` is wall
+    # clock for metering, which can jump.
+    budget_started = time.monotonic()
     while True:
         try:
             with urllib.request.urlopen(req, timeout=config.timeout_sec) as response:
@@ -250,13 +254,17 @@ def _handle_go_verbatim_request(
             retry_after = (
                 exc.headers.get("retry-after") if exc.headers else None
             )
-            if retriable_http_failure(status, response_body) and retries < max_retries:
+            if (
+                retriable_http_failure(status, response_body)
+                and retries < max_retries
+                and retry_allowed(budget_started)
+            ):
                 retries += 1
                 retry_sleep(retries)
                 continue
             break
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
-            if retries < max_retries:
+            if retries < max_retries and retry_allowed(budget_started):
                 retries += 1
                 retry_sleep(retries)
                 continue

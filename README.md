@@ -633,6 +633,23 @@ traced as `upstream.pool` every `OPENCODE_GO_PROXY_POOL_REPORT_EVERY` opens
 (default `100`). Tracing is async and non-blocking by default;
 `OPENCODE_GO_PROXY_TRACE=0` turns it off.
 
+Transient upstream failures (429 / 5xx / network / timeout) are retried
+`OPENCODE_GO_PROXY_MAX_RETRIES` times (default `2`) with a short exponential
+backoff (`OPENCODE_GO_PROXY_RETRY_BASE_MS`, default `150`). The retry sequence
+is additionally bounded by wall clock: `OPENCODE_GO_PROXY_RETRY_BUDGET_SEC`
+(default `60`, `0` disables the cap) is the longest a request may spend
+retrying before the error is surfaced.
+
+The TCP/TLS handshake has its own cap, `OPENCODE_GO_PROXY_CONNECT_TIMEOUT_SEC`
+(default `15`, `0` disables). `--timeout-sec` cannot be lowered to bound a
+connect problem because it also bounds how long a streaming body may sit
+silent, so a black-holed connect (SYN dropped, `WinError 10060`) used to spend
+the whole 180s per attempt: on 2026-11-17 each attempt cost 42s and the
+two-retry policy held the client for 126s. With the connect cap, one attempt
+fails in 15s and the socket is handed the full request timeout after the
+handshake, so long reasoning streams are unaffected. A request timeout below
+the cap always wins.
+
 Every trace line is one JSON object with a `level` field (`debug` / `info` /
 `warn` / `error`): per-request telemetry (received/converted, upstream
 start/done) is `debug`; lifecycle milestones and rare routing decisions are

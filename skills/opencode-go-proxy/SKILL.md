@@ -52,7 +52,7 @@ Resolved in order: `OPENCODE_GO_API_KEY`, `OPENCODE_API_KEY`, then macOS keychai
 ## Reliability
 
 - Truncated streams are never counted as success: the meter (`usage-events.jsonl`) records `streamAborted` with status 502.
-- Transient upstream failures (429/5xx/network/timeout) are retried with bounded backoff (`OPENCODE_GO_PROXY_MAX_RETRIES`, default 2) before surfacing an error.
+- Transient upstream failures (429/5xx/network/timeout) are retried with bounded backoff (`OPENCODE_GO_PROXY_MAX_RETRIES`, default 2) before surfacing an error. Retries are also capped by wall clock (`OPENCODE_GO_PROXY_RETRY_BUDGET_SEC`, default 60), and the TCP/TLS handshake has its own shorter cap (`OPENCODE_GO_PROXY_CONNECT_TIMEOUT_SEC`, default 15) so a black-holed connect fails in seconds instead of burning the full `--timeout-sec` per attempt.
 - The WebSocket upgrade the Codex desktop app attempts for realtime is answered with `HTTP/1.1 426`; the app falls back to HTTP streaming. That is by design, not an error.
 
 ## Config

@@ -12,6 +12,7 @@ import http.client
 import os
 import socket
 import threading
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -19,7 +20,7 @@ from typing import Any
 from .config import ProxyConfig
 from .quota import record_quota_from_headers
 from .trace import _mask_trace_body, trace
-from .upstream import retriable_http_failure, retry_sleep
+from .upstream import retriable_http_failure, retry_allowed, retry_sleep
 
 DEFAULT_KEEPALIVE_SEC = 15.0
 
@@ -156,8 +157,15 @@ def _open_upstream_stream(
     Returns ``(response, attempts)``; after retries are exhausted raises
     :class:`_ConnectFailed` with the terminal exception. Quota headers are
     harvested from the successful response.
+
+    Retries are bounded twice: by ``max_retries`` and by the wall-clock budget
+    in :func:`opencode_go_proxy.upstream.retry_allowed`. The count alone lets a
+    black-holing network spend the full per-attempt timeout several times over
+    (126s observed); the deadline caps the sequence at roughly one budget plus
+    the final attempt.
     """
     attempts = 0
+    started = time.monotonic()
     while True:
         try:
             response = urllib.request.urlopen(req, timeout=config.timeout_sec)
@@ -173,7 +181,11 @@ def _open_upstream_stream(
                 body=_mask_trace_body(body),
                 body_len=len(raw),
             )
-            if retriable_http_failure(exc.code, body) and attempts < max_retries:
+            if (
+                retriable_http_failure(exc.code, body)
+                and attempts < max_retries
+                and retry_allowed(started)
+            ):
                 attempts += 1
                 trace("upstream.retry", level="warn", request_id=request_id, attempt=attempts, status=exc.code)
                 retry_sleep(attempts)
@@ -186,7 +198,7 @@ def _open_upstream_stream(
             # covers the pure-http.client failures incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("upstream.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
-            if attempts < max_retries:
+            if attempts < max_retries and retry_allowed(started):
                 attempts += 1
                 trace("upstream.retry", level="warn", request_id=request_id, attempt=attempts, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(attempts)

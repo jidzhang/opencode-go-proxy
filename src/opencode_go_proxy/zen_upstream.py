@@ -83,6 +83,7 @@ from .upstream import (
     record_cache,
     record_cache_from_body,
     retriable_http_failure,
+    retry_allowed,
     retry_sleep,
     usage_tokens,
     with_include_usage,
@@ -386,6 +387,7 @@ def _zen_post(
     """
     max_retries = default_max_retries() if max_retries is None else max_retries
     retries = 0
+    budget_started = time.monotonic()
     while True:
         request = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
         trace(f"{provider}.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
@@ -412,7 +414,11 @@ def _zen_post(
                 body=_mask_trace_body(body),
                 body_len=len(raw),
             )
-            if retriable_http_failure(exc.code, body) and retries < max_retries:
+            if (
+                retriable_http_failure(exc.code, body)
+                and retries < max_retries
+                and retry_allowed(budget_started)
+            ):
                 retries += 1
                 trace(f"{provider}.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
@@ -457,7 +463,7 @@ def _zen_post(
             ) from exc
         except TimeoutError:
             trace(f"{provider}.timeout", level="warn", request_id=request_id, timeout=config.timeout_sec)
-            if retries < max_retries:
+            if retries < max_retries and retry_allowed(budget_started):
                 retries += 1
                 trace(f"{provider}.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
                 retry_sleep(retries)
@@ -468,7 +474,7 @@ def _zen_post(
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace(f"{provider}.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
-            if retries < max_retries:
+            if retries < max_retries and retry_allowed(budget_started):
                 retries += 1
                 trace(f"{provider}.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(retries)
@@ -494,6 +500,7 @@ def _zen_post_verbatim(
     """
     max_retries = default_max_retries() if max_retries is None else max_retries
     retries = 0
+    budget_started = time.monotonic()
     while True:
         request = urllib.request.Request(url, data=raw_payload, headers=headers, method="POST")
         trace("zen.start", level="debug", request_id=request_id, url=url, bytes=len(raw_payload), attempt=retries + 1)
@@ -507,7 +514,11 @@ def _zen_post_verbatim(
         except urllib.error.HTTPError as exc:
             body = exc.read()
             trace("zen.error", level="warn", request_id=request_id, status=exc.code, body=_mask_trace_body(body.decode("utf-8", errors="replace")))
-            if retriable_http_failure(exc.code, body) and retries < max_retries:
+            if (
+                retriable_http_failure(exc.code, body)
+                and retries < max_retries
+                and retry_allowed(budget_started)
+            ):
                 retries += 1
                 trace("zen.retry", level="warn", request_id=request_id, attempt=retries, status=exc.code)
                 retry_sleep(retries)
@@ -519,7 +530,7 @@ def _zen_post_verbatim(
             return exc.code, body, retries, (exc.headers.get("content-type") if exc.headers else None), retry_after
         except TimeoutError:
             trace("zen.timeout", level="warn", request_id=request_id, timeout=config.timeout_sec)
-            if retries < max_retries:
+            if retries < max_retries and retry_allowed(budget_started):
                 retries += 1
                 trace("zen.retry", level="warn", request_id=request_id, attempt=retries, reason="timeout")
                 retry_sleep(retries)
@@ -530,7 +541,7 @@ def _zen_post_verbatim(
             # Transient connect-phase failures, incl. RemoteDisconnected (a
             # ConnectionResetError/BadStatusLine hybrid, not a URLError).
             trace("zen.network_error", level="warn", request_id=request_id, reason=str(getattr(exc, "reason", exc)))
-            if retries < max_retries:
+            if retries < max_retries and retry_allowed(budget_started):
                 retries += 1
                 trace("zen.retry", level="warn", request_id=request_id, attempt=retries, reason=str(getattr(exc, "reason", exc)))
                 retry_sleep(retries)

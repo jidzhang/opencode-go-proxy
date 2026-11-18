@@ -22,12 +22,39 @@ from .trace import trace
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_BASE_SLEEP_MS = 150
 
+# Wall-clock cap on the whole retry sequence, not on a single attempt. The
+# attempt count alone cannot bound a turn whose network is black-holing SYNs:
+# each connect can burn the full timeout on every address, so "3 attempts"
+# measured 126s in the logs (10060 black hole, 42s per attempt). A deadline
+# turns that into "give up after about a minute", and a retry that cannot
+# start before the deadline is never started. 0 disables the cap.
+DEFAULT_RETRY_BUDGET_SEC = 60.0
+
 
 def default_max_retries() -> int:
     try:
         return max(0, int(os.environ.get("OPENCODE_GO_PROXY_MAX_RETRIES", str(DEFAULT_MAX_RETRIES))))
     except ValueError:
         return DEFAULT_MAX_RETRIES
+
+
+def retry_budget_sec() -> float:
+    """Wall-clock budget for one request's retries (``OPENCODE_GO_PROXY_RETRY_BUDGET_SEC``)."""
+    try:
+        return max(0.0, float(os.environ.get("OPENCODE_GO_PROXY_RETRY_BUDGET_SEC", str(DEFAULT_RETRY_BUDGET_SEC))))
+    except ValueError:
+        return DEFAULT_RETRY_BUDGET_SEC
+
+
+def retry_allowed(started: float) -> bool:
+    """Whether another retry may start, given when the request began.
+
+    ``started`` is a ``time.monotonic()`` reading. Checked *before* a retry so
+    a retry is never begun that the budget already forbids; the last attempt
+    still runs to its own timeout, so the worst case is budget + one attempt.
+    """
+    budget = retry_budget_sec()
+    return budget <= 0 or (time.monotonic() - started) < budget
 
 
 def retriable_http_status(code: int) -> bool:

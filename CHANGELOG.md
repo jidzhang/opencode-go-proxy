@@ -159,6 +159,22 @@
 
 ### Fixed
 
+- The TCP/TLS handshake now has its own timeout,
+  `OPENCODE_GO_PROXY_CONNECT_TIMEOUT_SEC` (default `15`, `0` disables). A
+  black-holed connect (SYN dropped, `WinError 10060`) used to spend the whole
+  `--timeout-sec` per attempt - 42s observed on 2026-11-17, so the two-retry
+  policy held the client for 126s before the 502. `--timeout-sec` could not
+  simply be lowered because it also bounds silent streaming reads; the connect
+  cap applies only to the handshake and the socket is given the full request
+  timeout once connected, so long reasoning streams keep their window. A
+  black-holed upstream now fails in 45s instead of 126s
+  (`src/opencode_go_proxy/upstream_pool.py`).
+- A retry sequence is now bounded by wall clock as well as attempt count.
+  `OPENCODE_GO_PROXY_RETRY_BUDGET_SEC` (default `60`, `0` disables) is the
+  longest a request may spend retrying before the error is surfaced, so a
+  slow-failing upstream cannot hold a client through an unbounded number of
+  full-length attempts (`src/opencode_go_proxy/upstream.py`, `streaming.py`,
+  `go_upstream.py`, `zen_upstream.py`).
 - Empty-stream exhaustion no longer ends a Responses-family turn with a
   silent, valid-but-empty completion: clients logged "no text, no tool
   calls, and no usage" and the agent stopped mid-task as if the work were

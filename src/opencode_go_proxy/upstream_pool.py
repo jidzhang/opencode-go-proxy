@@ -47,7 +47,19 @@ POOL_ENV = "OPENCODE_GO_PROXY_POOL"
 POOL_SIZE_ENV = "OPENCODE_GO_PROXY_POOL_SIZE"
 POOL_IDLE_ENV = "OPENCODE_GO_PROXY_POOL_IDLE_SEC"
 POOL_REPORT_ENV = "OPENCODE_GO_PROXY_POOL_REPORT_EVERY"
+CONNECT_TIMEOUT_ENV = "OPENCODE_GO_PROXY_CONNECT_TIMEOUT_SEC"
 _DEFAULT_REPORT_EVERY = 100
+
+# Connect-phase cap, deliberately far below the request timeout. The request
+# timeout also bounds how long a *streaming body* may sit silent mid-turn
+# (a reasoning model can pause well past a minute), so it cannot be tightened
+# to fix a connect problem. A connect that black-holes SYNs (WinError 10060)
+# spends the whole per-attempt timeout on Windows' SYN-retransmit budget
+# across both addresses - 42s observed - so three attempts held a client for
+# 126s. Capping only the handshake makes one attempt fail in 15s while leaving
+# long streams untouched. The socket timeout is raised back to the request
+# timeout once connected, so reads after the handshake keep the full window.
+_DEFAULT_CONNECT_TIMEOUT_SEC = 15.0
 
 _DEFAULT_SIZE = 8
 # Kept for an hour. Two independent facts set this: the upstream prefix cache
@@ -108,6 +120,23 @@ def pool_idle_sec() -> float:
         return max(1.0, float(os.environ.get(POOL_IDLE_ENV, str(_DEFAULT_IDLE_SEC))))
     except ValueError:
         return _DEFAULT_IDLE_SEC
+
+
+def connect_timeout_sec(request_timeout: float | None) -> float | None:
+    """Socket timeout for the TCP/TLS handshake, never above the request one.
+
+    ``0`` (or any non-positive value) disables the cap. A request timeout
+    smaller than the cap wins: the caller's own bound is never widened.
+    """
+    try:
+        cap = float(os.environ.get(CONNECT_TIMEOUT_ENV, str(_DEFAULT_CONNECT_TIMEOUT_SEC)))
+    except ValueError:
+        cap = _DEFAULT_CONNECT_TIMEOUT_SEC
+    if cap <= 0:
+        return request_timeout
+    if request_timeout is None or request_timeout <= 0:
+        return cap
+    return min(cap, request_timeout)
 
 
 def pool_stats() -> dict[str, Any]:
@@ -306,6 +335,27 @@ def _request_headers(req: urllib.request.Request) -> dict[str, str] | None:
     return headers
 
 
+def _restore_read_timeout(conn: Any, timeout: float | None) -> None:
+    """Give the connected socket back the caller's request timeout.
+
+    ``http.client`` applies its constructor timeout to the socket during
+    ``connect()`` and every later ``send``/``read`` inherits it from that
+    socket, so a connection built with the short connect cap would also time
+    out long streaming reads. Raising the socket timeout after the handshake
+    restores the caller's bound. Best-effort: a test double without a real
+    socket simply keeps whatever it has.
+    """
+    if timeout is None or timeout <= 0:
+        return
+    sock = getattr(conn, "sock", None)
+    if sock is None:
+        return
+    try:
+        sock.settimeout(timeout)
+    except (OSError, AttributeError, ValueError):
+        pass
+
+
 def _enable_keepalive(conn: Any) -> None:
     """Turn on TCP keepalive for a connected socket; best-effort.
 
@@ -389,7 +439,11 @@ def _pooled_do_open(
             _note_open()
             return wrapped
 
-    conn = http_class(host, timeout=timeout, **http_conn_args)
+    # The handshake gets the short connect cap; the connection then carries the
+    # caller's request timeout for the rest of its life, so a long streaming
+    # read keeps the full window the caller asked for.
+    connect_timeout = connect_timeout_sec(timeout)
+    conn = http_class(host, timeout=connect_timeout, **http_conn_args)
     try:
         conn.set_debuglevel(debuglevel)
     except Exception:  # noqa: BLE001 - debug level is best-effort
@@ -402,6 +456,7 @@ def _pooled_do_open(
         if callable(connect):
             connect()
             _enable_keepalive(conn)
+        _restore_read_timeout(conn, timeout)
         resp = _send_on(conn, method, selector, data, headers, encode_chunked)
     except OSError as err:
         _quiet_close(conn)

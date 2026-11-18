@@ -25,9 +25,13 @@ from opencode_go_proxy.zen_upstream import _restore_responses_sse_line
 class FakeSock:
     def __init__(self) -> None:
         self.closed = False
+        self.timeouts: list[float | None] = []
 
     def close(self) -> None:
         self.closed = True
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeouts.append(value)
 
 
 class FakeResp:
@@ -265,6 +269,59 @@ class TestKeepAliveReuse:
             resp2.read()
             resp2.close()
             assert len(FakeConn.instances) == 1  # second turn reused it
+
+
+class TestConnectTimeoutSplit:
+    """The handshake gets a short cap; the stream keeps the request timeout.
+
+    A black-holed connect costs the whole per-attempt timeout on Windows
+    (42s observed, three attempts held a client 126s), but that same timeout
+    also bounds how long a reasoning stream may sit silent, so it cannot just
+    be lowered. Only the handshake is capped.
+    """
+
+    def setup_method(self) -> None:
+        pool.reset_pool()
+        FakeConn.instances.clear()
+        FakeConn.next_failures.clear()
+        FakeConn.resp_kwargs = {}
+
+    def teardown_method(self) -> None:
+        pool.reset_pool()
+        FakeConn.instances.clear()
+        FakeConn.next_failures.clear()
+        FakeConn.resp_kwargs = {}
+
+    def test_connection_is_built_with_the_connect_cap(self) -> None:
+        with _pool_env(**{pool.CONNECT_TIMEOUT_ENV: "15"}):
+            handler = pool.PooledHTTPSHandler()
+            resp = handler.do_open(FakeConn, _make_request())  # req.timeout == 30
+            resp.read()
+            resp.close()
+        assert FakeConn.instances[0].timeout == 15.0
+
+    def test_socket_timeout_is_restored_after_the_handshake(self) -> None:
+        with _pool_env(**{pool.CONNECT_TIMEOUT_ENV: "15"}):
+            handler = pool.PooledHTTPSHandler()
+            resp = handler.do_open(FakeConn, _make_request())
+            resp.read()
+            resp.close()
+        # 30 is the request timeout; the short cap must not survive into reads.
+        assert FakeConn.instances[0].sock.timeouts == [30.0]
+
+    def test_request_timeout_below_the_cap_wins(self) -> None:
+        req = _make_request()
+        req.timeout = 5.0
+        with _pool_env(**{pool.CONNECT_TIMEOUT_ENV: "15"}):
+            assert pool.connect_timeout_sec(req.timeout) == 5.0
+
+    def test_zero_disables_the_cap(self) -> None:
+        with mock.patch.dict(os.environ, {pool.CONNECT_TIMEOUT_ENV: "0"}, clear=False):
+            assert pool.connect_timeout_sec(180.0) == 180.0
+
+    def test_garbage_falls_back_to_the_default(self) -> None:
+        with mock.patch.dict(os.environ, {pool.CONNECT_TIMEOUT_ENV: "soon"}, clear=False):
+            assert pool.connect_timeout_sec(180.0) == pool._DEFAULT_CONNECT_TIMEOUT_SEC
 
 
 class TestPoolReporting:

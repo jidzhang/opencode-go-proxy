@@ -7,11 +7,17 @@ test_network_mapping (_open_upstream_stream) and test_zen_upstream (_zen_post).
 """
 
 import json
+import os
+import time
+from unittest import mock
 
 from opencode_go_proxy.upstream import (
+    DEFAULT_RETRY_BUDGET_SEC,
     normalize_usage_limit_error,
     retriable_http_failure,
     retriable_http_status,
+    retry_allowed,
+    retry_budget_sec,
 )
 
 GO_QUOTA_BODY = json.dumps({
@@ -40,6 +46,38 @@ class TestRetryClassification:
         # A 5xx is transient even when its body happens to look like a quota
         # error: only 429 is downgraded to terminal.
         assert retriable_http_failure(503, GO_QUOTA_BODY)
+
+
+class TestRetryBudget:
+    """The retry sequence is bounded by wall clock, not only by attempt count.
+
+    A black-holing network (SYN dropped, WinError 10060) spends the full
+    per-attempt timeout on every try; two retries measured 126s in production.
+    The budget stops starting retries once the request is older than the
+    budget, so the turn fails in about a minute instead of two.
+    """
+
+    def test_default_budget_is_a_minute(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            assert retry_budget_sec() == DEFAULT_RETRY_BUDGET_SEC
+
+    def test_env_override_and_garbage_fallback(self) -> None:
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_RETRY_BUDGET_SEC": "5"}, clear=True):
+            assert retry_budget_sec() == 5.0
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_RETRY_BUDGET_SEC": "soon"}, clear=True):
+            assert retry_budget_sec() == DEFAULT_RETRY_BUDGET_SEC
+
+    def test_zero_disables_the_cap(self) -> None:
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_RETRY_BUDGET_SEC": "0"}, clear=True):
+            assert retry_allowed(time.monotonic() - 10_000)
+
+    def test_fresh_request_may_retry(self) -> None:
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_RETRY_BUDGET_SEC": "60"}, clear=True):
+            assert retry_allowed(time.monotonic())
+
+    def test_request_past_the_budget_may_not_retry(self) -> None:
+        with mock.patch.dict(os.environ, {"OPENCODE_GO_PROXY_RETRY_BUDGET_SEC": "60"}, clear=True):
+            assert not retry_allowed(time.monotonic() - 61)
 
 
 class TestQuotaNormalization:

@@ -9,7 +9,9 @@ distinct 504 mapping after the except-clause reorder.
 from __future__ import annotations
 
 import http.client
+import os
 import ssl
+import urllib.error
 import urllib.request
 from http import HTTPStatus
 from types import SimpleNamespace
@@ -63,6 +65,61 @@ class TestOpenStreamMapping:
                 assert isinstance(fail.exc, TimeoutError)
             else:  # pragma: no cover
                 raise AssertionError("TimeoutError leaked raw")
+
+
+class TestRetryBudgetStopsTheSequence:
+    """A black-holed connect must not be retried past the wall-clock budget.
+
+    The 2026-11-17 logs show three connect attempts of ~42s each against a
+    network dropping SYNs (WinError 10060): 126s before the client saw a 502.
+    With the budget set, the sequence stops as soon as a retry would start
+    after the deadline, so the failure surfaces in roughly one attempt.
+    """
+
+    def test_budget_exhausted_after_first_attempt_does_not_retry(self) -> None:
+        attempts = 0
+
+        def fake_urlopen(request, *args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise urllib.error.URLError(TimeoutError("connect timed out"))
+
+        # A 0.01s budget with a clock that jumps past it after the first
+        # attempt: the first try is allowed, the retry is not.
+        readings = iter([0.0, 999.0, 999.0])
+        with mock.patch.dict(
+            os.environ, {"OPENCODE_GO_PROXY_RETRY_BUDGET_SEC": "0.01"}, clear=False
+        ), mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+            "time.monotonic", side_effect=lambda: next(readings, 999.0)
+        ):
+            try:
+                _open_upstream_stream(_req(), _config(), "r", 5)
+            except _ConnectFailed as fail:
+                assert fail.attempts == 0
+            else:  # pragma: no cover
+                raise AssertionError("budget did not stop the retry sequence")
+        assert attempts == 1
+
+    def test_budget_absent_keeps_the_attempt_count_bound(self) -> None:
+        attempts = 0
+
+        def fake_urlopen(request, *args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            raise urllib.error.URLError(TimeoutError("connect timed out"))
+
+        with mock.patch.dict(
+            os.environ, {"OPENCODE_GO_PROXY_RETRY_BUDGET_SEC": "0"}, clear=False
+        ), mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), mock.patch(
+            "opencode_go_proxy.streaming.retry_sleep"
+        ):
+            try:
+                _open_upstream_stream(_req(), _config(), "r", 2)
+            except _ConnectFailed as fail:
+                assert fail.attempts == 2
+            else:  # pragma: no cover
+                raise AssertionError("attempt count bound was not applied")
+        assert attempts == 3
 
 
 class TestZenMapping:
