@@ -276,6 +276,13 @@
   processes silently share one port, so double-clicking the start script
   used to split traffic across two instances.
 
+- The macOS/Linux helper scripts work after a reboot: `restart-proxy-19999.sh`
+  no longer assumes `setsid(1)` (absent on macOS), reports the real restart
+  result instead of racing the delayed start with an immediate health check,
+  and escalates to SIGKILL when a stale listener ignores SIGTERM.
+  `start-proxy-19999.sh` now starts detached by default and returns after
+  `/health` turns 200 (`--foreground` keeps the attached behavior).
+
 ## [0.4.10] - 2026-08-14
 
 ## [0.4.8] - 2026-08-14

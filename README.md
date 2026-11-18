@@ -700,6 +700,22 @@ Defaults work on one machine with no `proxy-local.bat`: the server binds
 `OPENCODE_GO_PROXY_LAN_IP` is optional; it only prints the LAN URL in the
 startup banner when the bind is non-loopback.
 
+### macOS/Linux helper scripts
+
+The repo-root `.sh` scripts mirror the Windows helpers on port 19999:
+
+| Script | Purpose |
+|--------|---------|
+| `start-proxy-19999.sh` | Start one detached instance and return once `/health` is up; `--foreground` keeps the old attached behavior |
+| `restart-proxy-19999.sh` | Replace whatever holds 19999 with a fresh detached instance and wait for `/health` |
+| `scripts/diag/restart_proxy.sh [PORT]` | Thin wrapper around the delayed restart above |
+
+Both require `uv` on `PATH` and `OPENCODE_GO_API_KEY` exported. They log to
+`/tmp/proxy19999.log` (rotated on each start/restart) and write the pid to
+`/tmp/proxy19999.pid`. Linux uses `setsid`; macOS has no `setsid`, so the
+scripts fall back to `nohup` — either way the proxy survives the terminal
+closing. Run `start-proxy-19999.sh --help` for the mode flags.
+
 ### Remote access
 
 Keep the proxy on loopback whenever possible. A non-loopback bind fails closed
